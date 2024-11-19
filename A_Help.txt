@@ -1,0 +1,15 @@
+########################################
+############      Main       ###########
+########################################
+strategy=RSI  
+# (PV)
+Price-Volume Change
+# (SMA)
+Simple Moving Average 
+# (RSI)
+Relative Strength Index 
+# (MACD) 
+Moving Average Convergence Divergence
+# (VWAP) 
+Volume-weighted average price,
+

@@ -1,0 +1,27 @@
+########################################
+############      Main       ###########
+########################################
+symbol=ETHUSDT
+bar_length=15m
+leverage=5
+strategy=PV
+tc=-0.00085
+test_days=365
+
+########################################
+############     Control     ###########
+########################################
+Perform_Testing=False
+Print_Data=False
+Perform_Trading=True
+
+########################################
+############   Trading Config  #########
+########################################
+history_days=180
+trade_hours=24
+minimum_future_trade_value=100
+trade_value=500.0
+n_trades=50
+position=0
+stop_loss_pct=0.02
