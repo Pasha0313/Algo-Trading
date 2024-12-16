@@ -4,16 +4,15 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import warnings
+import time
 warnings.filterwarnings("ignore")
 plt.style.use("seaborn-v0_8")
 
 class Futures_Backtester_PV():
     ''' Class for the vectorized backtesting of (levered) Futures trading strategies.
-    
+    filepath
     Attributes
     ============
-    filepath: str
-        local filepath of the dataset (csv-file)
     symbol: str
         ticker symbol (instrument) to be backtested
     start: str
@@ -22,43 +21,8 @@ class Futures_Backtester_PV():
         end date for data import
     tc: float
         proportional trading costs per trade
-    
-    
-    Methods
-    =======
-    get_data:
-        imports the data.
-        
-    test_strategy:
-        prepares the data and backtests the trading strategy incl. reporting (wrapper).
-        
-    prepare_data:
-        prepares the data for backtesting.
-    
-    run_backtest:
-        runs the strategy backtest.
-        
-    plot_results:
-        plots the cumulative performance of the trading strategy compared to buy-and-hold.
-        
-    optimize_strategy:
-        backtests strategy for different parameter values incl. optimization and reporting (wrapper).
-    
-    find_best_strategy:
-        finds the optimal strategy (global maximum).
-        
-    add_sessions:
-        adds/labels trading sessions and their compound returns.
-        
-    add_leverage:
-        adds leverage to the strategy.
-        
-    print_performance:
-        calculates and prints various performance metrics.
-        
     '''    
     
-    #def __init__(self, filepath, symbol, start, end, tc):
     def __init__(self, client, symbol, bar_length, start, end, tc, leverage=5, strategy="PV"):
         self.client = client  # Store the client object
         self.symbol = str(symbol)
@@ -80,39 +44,71 @@ class Futures_Backtester_PV():
 
     def __repr__(self):
         return "\nFutures Backtester PV(symbol = {}, start = {}, end = {})\n".format(self.symbol, self.start, self.end)
-        
+
+##################################################################################
+#    get_data:
+#        imports the data.
+##################################################################################
     def get_data(self):
         start_str = self.start
         end_str = self.end if self.end else None
-        
-        bars = self.client.futures_historical_klines(symbol=self.symbol, interval=self.bar_length,
-                                                     start_str=start_str, end_str=end_str, limit=1000)
-        data = pd.DataFrame(bars)
+        all_bars = []  
+        current_start_str = start_str
+
+        previous_candles_count = 0  
+        print("\n")
+        while True:
+            # Fetch a chunk of data (up to 1000 candles)
+            print(f"Requesting data from {pd.to_datetime(current_start_str).strftime('%Y-%m-%d %H:%M')}...")
+
+            bars = self.client.futures_historical_klines(symbol=self.symbol,interval=self.bar_length,
+                start_str=current_start_str,end_str=end_str,limit=1000)
+
+            if not bars:
+                print("No more data available or the API limit has been reached.")
+                break
+
+            all_bars.extend(bars)
+            last_timestamp = pd.to_datetime(bars[-1][0], unit="ms")
+            current_start_str = (last_timestamp + pd.Timedelta(milliseconds=1)).strftime('%Y-%m-%d %H:%M')
+            print(f"Collected {len(all_bars)} candles so far...")
+            
+            if len(all_bars) == previous_candles_count + 1:
+                print("Only one new candle collected, exiting loop.")
+                break
+            previous_candles_count = len(all_bars)
+
+            # Add delay to avoid hitting the API rate limit
+            time.sleep(1)
+
+        print(f"Total of {len(all_bars)} candles collected.\n")
+
+        data = pd.DataFrame(all_bars)
         data["Date"] = pd.to_datetime(data.iloc[:, 0], unit="ms")
-        data.columns = ["Open Time", "Open", "High", "Low", "Close", "Volume",
-                      "Clos Time", "Quote Asset Volume", "Number of Trades",
-                      "Taker Buy Base Asset Volume", "Taker Buy Quote Asset Volume", "Ignore", "Date"]
+        data.columns = [
+            "Open Time", "Open", "High", "Low", "Close", "Volume",
+            "Close Time", "Quote Asset Volume", "Number of Trades",
+            "Taker Buy Base Asset Volume", "Taker Buy Quote Asset Volume", "Ignore", "Date"
+        ]
         data = data[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
         data.set_index("Date", inplace=True)
         for column in data.columns:
             data[column] = pd.to_numeric(data[column], errors="coerce")
         data["returns"] = np.log(data["Close"] / data["Close"].shift(1))
-        data["Complete"] = [True for _ in range(len(data)-1)] + [False]
+        data["Complete"] = [True for _ in range(len(data) - 1)] + [False]
         self.data = data
 
+#########################################################################################################
+#    test_strategy:
+#        Prepares the data and backtests the trading strategy incl. reporting (Wrapper).
+#        Parameters
+#        ============
+#        percentiles: tuple (return_low_perc, return_high_perc, vol_low_perc, vol_high_perc)
+#            return and volume percentiles to be considered for the strategy.
+#        thresh: tuple (return_low_thresh, return_high_thresh, vol_low_thresh, vol_high_thesh)
+#            return and volume thresholds to be considered for the strategy.
+#########################################################################################################
     def test_strategy(self, percentiles = None, thresh = None):
-        '''
-        Prepares the data and backtests the trading strategy incl. reporting (Wrapper).
-         
-        Parameters
-        ============
-        percentiles: tuple (return_low_perc, return_high_perc, vol_low_perc, vol_high_perc)
-            return and volume percentiles to be considered for the strategy.
-            
-        thresh: tuple (return_low_thresh, return_high_thresh, vol_low_thresh, vol_high_thesh)
-            return and volume thresholds to be considered for the strategy.
-        '''
-        
         self.prepare_data(percentiles = percentiles, thresh = thresh)
         self.run_backtest()
         
@@ -123,9 +119,11 @@ class Futures_Backtester_PV():
         
         self.print_performance()
 
+##################################################################################        
+#    prepare_data:
+#        prepares the data for backtesting.
+###################################################################################        
     def prepare_data(self, percentiles, thresh):
-        ''' Prepares the Data for Backtesting.
-        '''
         ########################## Strategy-Specific #############################
         if not hasattr(self, 'data') or self.data is None:
             warnings.warn("Data is not initialized. Define 'data' before calling define_strategy_PV", UserWarning)
@@ -150,25 +148,26 @@ class Futures_Backtester_PV():
         data["position"] = 0
         data.loc[cond1 & cond2, "position"] = 1
         data.loc[cond3 & cond2, "position"] = -1
-
-        ##########################################################################
-        
+     
         self.results = data
 
+##########################################################################
+#   run_backtest:
+#   runs the strategy backtest.
+##########################################################################
     def run_backtest(self):
-        ''' Runs the strategy backtest.
-        '''
-        
         data = self.results.copy()
         data["strategy"] = data["position"].shift(1) * data["returns"]
         data["trades"] = data.position.diff().fillna(0).abs()
         data.strategy = data.strategy + data.trades * self.tc
         
         self.results = data
-    
+
+#######################################################################################################
+#   plot_results:
+#   plots the cumulative performance of the trading strategy compared to buy-and-hold.
+#######################################################################################################
     def plot_strategy_comparison(self, leverage=False):
-        ''' Plots the cumulative performance of the trading strategy compared to buy-and-hold.
-        '''
         if self.results is None:
             print("Run test_strategy() first.")
         else:
@@ -176,7 +175,7 @@ class Futures_Backtester_PV():
             if leverage:
                 title += f" | Leverage = {self.leverage}"
 
-            plt.figure(figsize=(6, 4))
+            plt.figure(figsize=(8, 6))
 
             # Convert index and column data to numpy arrays
             index = self.results.index.to_numpy()
@@ -189,10 +188,12 @@ class Futures_Backtester_PV():
             if leverage:
                 cstrategy_levered = self.results["cstrategy_levered"].to_numpy()
                 plt.plot(index, cstrategy_levered, label="Strategy leverage")
-                
+            
+            plt.xticks(rotation=45)                
             plt.title(title)
             plt.legend()
             plt.show()    
+
 
     def plot_results_II(self):
         ''' Plots a scatter plot of volume change against returns.
@@ -220,7 +221,7 @@ class Futures_Backtester_PV():
             matrix_I = pd.crosstab(self.results['vol_cat'], self.results['ret_cat'])
             
             # Plotting the first heatmap
-            plt.figure(figsize=(6, 4))
+            plt.figure(figsize=(8, 6))
             sns.set(font_scale=1)
             sns.heatmap(matrix_I, cmap="RdYlBu_r", annot=True, robust=True, fmt=".0f")
             plt.title(f"Heatmap of Volume Change vs Returns | {self.symbol} | TC = {self.tc}")
@@ -239,37 +240,32 @@ class Futures_Backtester_PV():
         
 
             # Plotting the second heatmap
-            plt.figure(figsize=(6, 4))
-            sns.set(font_scale=1)
-            sns.heatmap(matrix_II, cmap="RdYlBu", annot=True, robust=True, fmt=".5f")
+            plt.figure(figsize=(8, 6))
+            sns.set(font_scale=0.75)
+            sns.heatmap(matrix_II, cmap="RdYlBu", annot=True, robust=True, fmt=".3f")
             plt.title(f"Heatmap of Volume Change vs Returns | {self.symbol} | TC = {self.tc}")
             plt.xlabel("Return cat")
             plt.ylabel("Volume cat")
             plt.show()
 
+###############################################################################################################
+#  optimize_strategy:
+#  backtests strategy for different parameter values incl. optimization and reporting (wrapper).
+#  Parameters
+#  ============
+#  return_low_range: tuple
+#  tuples of the form (start, end, step size).
+#  return_high_range: tuple
+#            tuples of the form (start, end, step size).
+#        vol_low_range: tuple
+#            tuples of the form (start, end, step size).
+#        vol_high_range: tuple
+#            tuples of the form (start, end, step size).
+#        metric: str
+#            performance metric to be optimized (can be "Multiple" or "Sharpe")
+################################################################################################################
     def optimize_strategy(self, return_low_range, return_high_range, vol_low_range, vol_high_range, metric = "Multiple"):
         print("\nOptimize Strategy is running. \n")
-        '''
-        Backtests strategy for different parameter values incl. Optimization and Reporting (Wrapper).
-         
-        Parameters
-        ============
-        return_low_range: tuple
-            tuples of the form (start, end, step size).
-        
-        return_high_range: tuple
-            tuples of the form (start, end, step size).
-            
-        vol_low_range: tuple
-            tuples of the form (start, end, step size).
-        
-        vol_high_range: tuple
-            tuples of the form (start, end, step size).
-        
-        metric: str
-            performance metric to be optimized (can be "Multiple" or "Sharpe")
-        '''
-        
         self.metric = metric
         
         if metric == "Multiple":
@@ -292,12 +288,18 @@ class Futures_Backtester_PV():
     
         self.results_overview =  pd.DataFrame(data = np.array(combinations), columns = ["return_low", "return_high", "vol_low", "vol_high"])
         self.results_overview["performance"] = performance
+
+        # Check performance values
+        print(f"Performance values:\n{self.results_overview}")
+        
         return_perc,vol_perc = self.find_best_strategy()
         return return_perc,vol_perc
-        
+
+#####################################################################################################
+#    find_best_strategy:
+#    finds the optimal strategy (global maximum).
+##################################################################################################### 
     def find_best_strategy(self):
-        ''' Finds the optimal strategy (global maximum). '''
-    
         best = self.results_overview.nlargest(1, "performance")
     
         # Convert numpy.int64 to native Python int
@@ -311,18 +313,17 @@ class Futures_Backtester_PV():
         # Call the method with Python int values
         self.test_strategy(percentiles=(return_perc[0], return_perc[1], vol_perc[0], vol_perc[1]))
         return return_perc,vol_perc
-
-
+ 
+ ###############################################################################################
+ #    add_sessions:
+ #    adds/labels trading sessions and their compound returns.
+ #    Parameter
+ #    ============
+ #    visualize: bool, default False
+ #    if True, visualize compound session returns over time
+ ###############################################################################################
     def add_sessions(self, visualize = True): # NEW!!!
-        ''' 
-        Adds/Labels Trading Sessions and their compound returns.
-        
-        Parameter
-        ============
-        visualize: bool, default False
-            if True, visualize compound session returns over time
-        '''
-        
+ 
         if self.results is None:
             print("Run test_strategy() first.")
             
@@ -344,18 +345,18 @@ class Futures_Backtester_PV():
             plt.show()            
             plt.close(fig)  # Close the figure to free up resources
 
+##################################################################################
+#   add_leverage:
+#   adds leverage to the strategy.]
+#   Parameter
+#        ============
+#        leverage: float (positive)
+#            degree of leverage.
+#        
+#        report: bool, default True
+#            if True, print Performance Report incl. Leverage.
+##################################################################################
     def add_leverage(self, leverage, report=True): 
-        ''' 
-        Adds Leverage to the Strategy.
-        
-        Parameter
-        ============
-        leverage: float (positive)
-            degree of leverage.
-        
-        report: bool, default True
-            if True, print Performance Report incl. Leverage.
-        '''
         self.add_sessions()
         self.leverage = leverage
         
@@ -375,12 +376,11 @@ class Futures_Backtester_PV():
             self.print_performance(leverage=True)
 
 
-    ############################## Performance ######################################
-    
+############################## Performance ######################################
+#   print_performance:
+#   calculates and prints various performance metrics.
+############################## Performance ######################################
     def print_performance(self, leverage = False): # Adj
-        ''' Calculates and prints various Performance Metrics.
-        '''
-        
         data = self.results.copy()
 
         if leverage: # NEW!

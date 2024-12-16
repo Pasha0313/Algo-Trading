@@ -4,61 +4,13 @@ import numpy as np
 import pandas as pd
 import warnings
 import ta
+import time
 
 warnings.filterwarnings("ignore")
 plt.style.use("seaborn-v0_8")
 
 
 class Futures_Backtester_MACD():
-    ''' Class for the vectorized backtesting of (levered) Futures trading strategies using MACD.
-    
-    Attributes
-    ============
-    client: object
-        client object to fetch data (e.g., Binance client)
-    symbol: str
-        ticker symbol (instrument) to be backtested
-    bar_length: str
-        time interval of the bars to be fetched
-    start: str
-        start date for data import
-    end: str
-        end date for data import
-    tc: float
-        proportional trading costs per trade
-    leverage: float
-        leverage to be applied to the strategy (default is 5)
-    strategy: str
-        trading strategy type, default is 'PV'
-    
-    
-    Methods
-    =======
-    get_data:
-        imports the data.
-        
-    test_strategy:
-        prepares the data and backtests the trading strategy incl. reporting.
-        
-    prepare_data:
-        prepares the data for backtesting.
-    
-    run_backtest:
-        runs the strategy backtest.
-        
-    plot_results:
-        plots the cumulative performance of the trading strategy compared to buy-and-hold.
-        
-    optimize_strategy:
-        backtests strategy for different parameter values incl. optimization and reporting.
-    
-    find_best_strategy:
-        finds the optimal strategy parameters.
-        
-    print_performance:
-        calculates and prints various performance metrics.
-        
-    '''    
 
     def __init__(self, client, symbol, bar_length, start, end, tc, leverage=5, strategy="MACD"):
         self.client = client
@@ -78,19 +30,50 @@ class Futures_Backtester_MACD():
     def get_data(self):
         start_str = self.start
         end_str = self.end if self.end else None
-        
-        bars = self.client.futures_historical_klines(symbol=self.symbol, interval=self.bar_length,
-                                                     start_str=start_str, end_str=end_str, limit=1000)
-        data = pd.DataFrame(bars)
+        all_bars = []  
+        current_start_str = start_str
+
+        previous_candles_count = 0  
+        print("\n")
+        while True:
+            # Fetch a chunk of data (up to 1000 candles)
+            print(f"Requesting data from {pd.to_datetime(current_start_str).strftime('%Y-%m-%d %H:%M')}...")
+
+            bars = self.client.futures_historical_klines(symbol=self.symbol,interval=self.bar_length,
+                start_str=current_start_str,end_str=end_str,limit=1000)
+
+            if not bars:
+                print("No more data available or the API limit has been reached.")
+                break
+
+            all_bars.extend(bars)
+            last_timestamp = pd.to_datetime(bars[-1][0], unit="ms")
+            current_start_str = (last_timestamp + pd.Timedelta(milliseconds=1)).strftime('%Y-%m-%d %H:%M')
+            print(f"Collected {len(all_bars)} candles so far...")
+            
+            if len(all_bars) == previous_candles_count + 1:
+                print("Only one new candle collected, exiting loop.")
+                break
+            previous_candles_count = len(all_bars)
+
+            # Add delay to avoid hitting the API rate limit
+            time.sleep(1)
+
+        print(f"Total of {len(all_bars)} candles collected.\n")
+
+        data = pd.DataFrame(all_bars)
         data["Date"] = pd.to_datetime(data.iloc[:, 0], unit="ms")
-        data.columns = ["Open Time", "Open", "High", "Low", "Close", "Volume",
-                        "Close Time", "Quote Asset Volume", "Number of Trades",
-                        "Taker Buy Base Asset Volume", "Taker Buy Quote Asset Volume", "Ignore", "Date"]
+        data.columns = [
+            "Open Time", "Open", "High", "Low", "Close", "Volume",
+            "Close Time", "Quote Asset Volume", "Number of Trades",
+            "Taker Buy Base Asset Volume", "Taker Buy Quote Asset Volume", "Ignore", "Date"
+        ]
         data = data[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
         data.set_index("Date", inplace=True)
         for column in data.columns:
             data[column] = pd.to_numeric(data[column], errors="coerce")
         data["returns"] = np.log(data["Close"] / data["Close"].shift(1))
+        data["Complete"] = [True for _ in range(len(data) - 1)] + [False]
         self.data = data
 
     def test_strategy(self, macd_slow, macd_fast, macd_signal):
@@ -230,6 +213,10 @@ class Futures_Backtester_MACD():
         
         self.results_overview = pd.DataFrame(data=np.array(combinations), columns=["macd_slow", "macd_fast", "macd_signal"])
         self.results_overview["performance"] = performance
+
+        # Check performance values
+        print(f"Performance values:\n{self.results_overview}")
+                
         macd_slow,macd_fast,macd_signal = self.find_best_strategy()
         return macd_slow,macd_fast,macd_signal
 

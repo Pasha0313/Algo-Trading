@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore")
 
 
 # Define the path
-PATH = r'C:\DATA\Trading\V1.8\Futures'
+PATH = r'C:\DATA\Trading\V1.9\Futures'
 
 # Load configuration using os.path.join to concatenate the path and file name
 
@@ -42,8 +42,6 @@ if __name__ == "__main__":
     # Example of using control settings
     if Perform_Testing:
         print("\nTesting mode is enabled.")
-    if Perform_Trading:
-        print("\nTrading mode is enabled.")
 
     # Prepare data and get individual values
     start_date, end_date, symbol, bar_length, leverage, strategy, tc, test_days = prepare_data_from_config(config)
@@ -58,7 +56,9 @@ if __name__ == "__main__":
         print(e)
         exit(1)
 
+    print(f"\n Attempt : Trying to connect to Binance...")
     client = Client(api_key=api_key, api_secret=secret_key, tld="com", testnet=True)
+    print("Successfully connected to Binance!")
 
     if Perform_Testing:
         print("\nFutures Backtester\n")
@@ -81,21 +81,24 @@ if __name__ == "__main__":
                 print("\nLast few rows of the data:")
                 print(backtester.data.tail())
                 
-            backtester.test_strategy(percentiles=(10, 90, 5, 20))
+            backtester.test_strategy(percentiles=(10, 20, 5, 20))
             backtester.plot_strategy_comparison()
             backtester.plot_results_II()
             backtester.plot_heatmap()
             backtester.results.trades.value_counts()
-            return_thresh , volume_thresh = backtester.optimize_strategy(return_low_range=(2, 20, 2),
-                                         return_high_range=(80, 98, 2), 
-                                         vol_low_range=(0, 18, 2), 
-                                         vol_high_range=(18, 40, 2),
-                                         metric="Sharpe")
-            backtester.results.cstrategy.plot(figsize=(12,8))
+
+            # Optimize PV strategy
+            return_low_range=(2, 15, 2)
+            return_high_range=(15, 30, 2) 
+            vol_low_range=(2, 20, 2) 
+            vol_high_range=(20, 50, 2)
+            metric="Sharpe"
+            return_thresh , volume_thresh = backtester.optimize_strategy(return_low_range,return_high_range,vol_low_range,vol_high_range,metric)
             backtester.results.position.value_counts()
             backtester.results.trades.value_counts()
             backtester.add_leverage(leverage=leverage) 
             backtester.plot_strategy_comparison(leverage=True)
+
 
         elif strategy == "SMA":
             print("\nSimple Moving Average Strategy")
@@ -112,8 +115,8 @@ if __name__ == "__main__":
             backtester.results.eff_lev.plot(figsize=(6, 4))
 
             # Optimize SMA strategy
-            SMA_S_range = (10, 50, 5)
-            SMA_M_range = (50, 100, 5)
+            SMA_S_range = (10, 20, 2)
+            SMA_M_range = (30, 50, 4)
             SMA_L_range = (100, 200, 5)
             metric = "Sharpe"
             sma_s, sma_m, sma_l = backtester.optimize_strategy(SMA_S_range, SMA_M_range, SMA_L_range, metric)
@@ -134,9 +137,9 @@ if __name__ == "__main__":
             backtester.results.trades.value_counts()
             
             # Optimize RSI strategy
-            rsi_window_range = (1, 20, 2)
-            rsi_lower_range = (20, 40, 5)
-            rsi_upper_range = (60, 80, 5)
+            rsi_window_range = (9, 15, 1)
+            rsi_lower_range = (15, 30, 5)
+            rsi_upper_range = (70, 85, 5)
             metric = "Sharpe"
             rsi_window,rsi_lower,rsi_upper = backtester.optimize_strategy(rsi_window_range, rsi_lower_range, rsi_upper_range, metric)
 
@@ -165,9 +168,9 @@ if __name__ == "__main__":
             # Output the count of trades
             print(backtester.results.trades.value_counts())
             # Optimize MACD strategy parameters
-            macd_slow_range = (20, 50, 2)     # Range for slow moving average
-            macd_fast_range = (5, 20, 1)      # Range for fast moving average
-            macd_signal_range = (5, 20, 1)    # Range for signal line
+            macd_slow_range = (26, 60, 2)     # Range for slow moving average
+            macd_fast_range = (5, 15, 1)      # Range for fast moving average
+            macd_signal_range = (5, 15, 1)    # Range for signal line
             metric = "Sharpe"                 # Metric to optimize for
     
             # Run optimization for the MACD strategy
@@ -176,7 +179,7 @@ if __name__ == "__main__":
         elif strategy == "VWAP":
             print("\nVolume Weighted Average Price")
             vwap_period = 14
-            vwap_threshold = 0.01
+            vwap_threshold = 0.1
             backtester = Futures_Backtester_VWAP(client=client,symbol=symbol,bar_length=bar_length,
                                                 start=start_date,end=end_date,tc=tc,
                                                 leverage=leverage,strategy=strategy)
@@ -188,8 +191,8 @@ if __name__ == "__main__":
             backtester.results.trades.value_counts()
     
             # Optimize VWAP strategy
-            vwap_period_range = (1, 30, 1)  # Example range for VWAP period
-            vwap_threshold_range = (0.001, 0.05, 0.001)  # Example range for VWAP threshold
+            vwap_period_range = (20, 50, 5)  # Example range for VWAP period
+            vwap_threshold_range = (0.1, 2.0, 0.1)  # Example range for VWAP threshold
             metric = "Sharpe"
             vwap_period, vwap_threshold = backtester.optimize_strategy(vwap_period_range, vwap_threshold_range, metric)
 
@@ -240,9 +243,9 @@ if __name__ == "__main__":
             elif strategy == "RSI":
                 print("\nRelative Strength Index")
                 if not Perform_Testing:
-                    rsi_window = 14
-                    rsi_lower = 30
-                    rsi_upper = 70
+                    rsi_window = 10
+                    rsi_lower = 20
+                    rsi_upper = 80
                 print(f"rsi_window={rsi_window}, rsi_lower={rsi_lower}, rsi_upper={rsi_upper}")
                 trader = FuturesTrader(client=client, symbol=symbol, bar_length=bar_length,
                             rsi_window=rsi_window, rsi_lower=rsi_lower, rsi_upper=rsi_upper,

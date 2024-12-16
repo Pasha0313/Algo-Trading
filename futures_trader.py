@@ -78,6 +78,14 @@ class FuturesTrader:
                                             start_str = str(days), end_str = None, limit = 1000) # Adj: futures_historical_klines
         df = pd.DataFrame(bars)
         df["Date"] = pd.to_datetime(df.iloc[:,0], unit = "ms")
+
+        # Get the start and end dates
+        start_date = df['Date'].min().strftime('%Y-%m-%d %H:%M')
+        end_date = df['Date'].max().strftime('%Y-%m-%d %H:%M')
+
+        # Print the start and end dates
+        print(f"Dataset Start from : {start_date}, End at: {end_date}")
+
         df.columns = ["Open Time", "Open", "High", "Low", "Close", "Volume",
                       "Clos Time", "Quote Asset Volume", "Number of Trades",
                       "Taker Buy Base Asset Volume", "Taker Buy Quote Asset Volume", "Ignore", "Date"]
@@ -122,7 +130,7 @@ class FuturesTrader:
         else:
             # print out
             print(".", end = "", flush = True) # just print something to get a feedback (everything OK) 
-            if ((event_time.minute % 10 == 0) and (event_time.second == 0)): print(f"\nTime : {event_time}, Trade Number = {self.trades}")
+            if ((event_time.minute % 10 == 0) and (event_time.second == 0)): print(f"\nTime : {event_time.strftime('%Y-%m-%d %H:%M')}, Trade Number = {self.trades}")
             #new_data = [first, high, low, close, volume, complete]
             #self.data.loc[start_time] = pd.Series(new_data, index=self.data.columns)
             # feed df (add new bar / update latest bar)
@@ -334,7 +342,7 @@ class FuturesTrader:
         time.sleep(0.1)
         order_time = order["updateTime"]
         trades = self.client.futures_account_trades(symbol = self.symbol, startTime = order_time)
-        order_time = pd.to_datetime(order_time, unit = "ms")
+        order_time = pd.to_datetime(order_time, unit = "ms").strftime('%Y-%m-%d %H:%M')
 
         # extract data from trades object
         df = pd.DataFrame(trades)
