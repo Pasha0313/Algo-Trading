@@ -2,18 +2,18 @@
 ############      Main       ###########
 ########################################
 symbol=BTCUSDT
-bar_length=5m
+bar_length=15m
 leverage=5
-strategy=RSI
+strategy=VWAP
 tc=-0.00085
-test_days=60
+test_days=10
 
 ########################################
 ############     Control     ###########
 ########################################
-Perform_Testing=False
+Perform_Testing=True
 Print_Data=False
-Perform_Trading=True
+Perform_Trading=False
 
 ########################################
 ############   Trading Config  #########

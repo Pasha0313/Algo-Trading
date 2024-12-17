@@ -167,31 +167,14 @@ class Futures_Backtester_SMA():
             if leverage:
                 cstrategy_levered = self.results["cstrategy_levered"].to_numpy()
                 plt.plot(index, cstrategy_levered, label="Strategy leverage")
-                
+            plt.xticks(rotation=45)      
             plt.title(title)
             plt.legend()
             plt.show()  
             
     def optimize_strategy(self, SMA_S_range, SMA_M_range, SMA_L_range, metric = "Multiple"):
         print("\n Optimize Strategy is running. \n")
-        '''
-        Backtests strategy for different parameter values incl. Optimization and Reporting (Wrapper).
-         
-        Parameters
-        ============
-        SMA_S_range: tuple
-            tuples of the form (start, end, step size).
-        
-        SMA_M_range: tuple
-            tuples of the form (start, end, step size).
-            
-        SMA_L_range: tuple
-            tuples of the form (start, end, step size).
-        
-        metric: str
-            performance metric to be optimized (can be "Multiple" or "Sharpe")
-        '''
-        
+
         self.metric = metric
         
         if metric == "Multiple":
@@ -259,6 +242,7 @@ class Futures_Backtester_SMA():
             ax.set_title("Compound Returns Over Time")
             plt.tight_layout()
             save_path = "/home/saeed/Desktop/Personal/Trading/Analysis/With_leverage.png"
+            plt.xticks(rotation=45)              
             plt.show()
             plt.savefig(save_path)
             print(f"Plot saved to {save_path}")

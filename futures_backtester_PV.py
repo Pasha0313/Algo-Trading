@@ -134,13 +134,17 @@ class Futures_Backtester_PV():
         data.loc[data.vol_ch > 3, "vol_ch"] = np.nan
         data.loc[data.vol_ch < -3, "vol_ch"] = np.nan        
         
+        #print(percentiles)
+
         if percentiles:
             self.return_thresh = np.percentile(data.returns.dropna(), [percentiles[0], percentiles[1]])
             self.volume_thresh = np.percentile(data.vol_ch.dropna(), [percentiles[2], percentiles[3]])
         elif thresh:
             self.return_thresh = [thresh[0], thresh[1]]
             self.volume_thresh = [thresh[2], thresh[3]]
-                
+
+        #print (self.return_thresh,self.volume_thresh,"\n")  
+
         cond1 = data.returns <= self.return_thresh[0]
         cond2 = data.vol_ch.between(self.volume_thresh[0], self.volume_thresh[1])
         cond3 = data.returns >= self.return_thresh[1]
@@ -150,6 +154,27 @@ class Futures_Backtester_PV():
         data.loc[cond3 & cond2, "position"] = -1
      
         self.results = data
+
+        #fig, ax1 = plt.subplots(figsize=(10, 6))  # Create a new figure and axis
+
+        # Plot the 'returns' data on the primary y-axis
+        #ax1.plot(data.index, data['returns'], label='Returns', color='tab:blue', linewidth=2)
+        #ax1.set_xlabel('Date')
+        #ax1.set_ylabel('Returns', color='tab:blue')  # Label for y-axis
+        #ax1.tick_params(axis='y', labelcolor='tab:blue')
+
+        # Add a second y-axis to the same plot for 'vol_ch'
+        #ax2 = ax1.twinx()
+        #ax2.plot(data.index, data['vol_ch'], label='Volume Change', color='tab:red', linestyle='--', linewidth=2)
+        #ax2.set_ylabel('Volume Change', color='tab:red')  # Label for second y-axis
+        #ax2.tick_params(axis='y', labelcolor='tab:red')
+
+        # Title and legend
+        #plt.title('Returns and Volume Change Over Time')
+        #fig.tight_layout()  # Ensure everything fits properly
+        #fig.legend(loc="upper left", bbox_to_anchor=(0.1, 0.9))
+
+        #plt.show()
 
 ##########################################################################
 #   run_backtest:
@@ -266,6 +291,7 @@ class Futures_Backtester_PV():
 ################################################################################################################
     def optimize_strategy(self, return_low_range, return_high_range, vol_low_range, vol_high_range, metric = "Multiple"):
         print("\nOptimize Strategy is running. \n")
+
         self.metric = metric
         
         if metric == "Multiple":
@@ -290,11 +316,10 @@ class Futures_Backtester_PV():
         self.results_overview["performance"] = performance
 
         # Check performance values
-        print(f"Performance values:\n{self.results_overview}")
+        print(f"Performance values:{self.results_overview} \n")
         
-        return_perc,vol_perc = self.find_best_strategy()
-        return return_perc,vol_perc
-
+        return_thresh,volume_thresh = self.find_best_strategy()
+        return  return_thresh,volume_thresh
 #####################################################################################################
 #    find_best_strategy:
 #    finds the optimal strategy (global maximum).
@@ -307,12 +332,17 @@ class Futures_Backtester_PV():
         vol_perc = [int(best.vol_low.iloc[0]), int(best.vol_high.iloc[0])]
         perf = best.performance.iloc[0]
     
+        data = self.results.copy()
+
+        return_thresh = np.percentile(data.returns.dropna(), [return_perc[0], return_perc[1]])
+        volume_thresh = np.percentile(data.vol_ch.dropna(), [vol_perc[0], vol_perc[1]])
+
         # Print formatted output
-        print("Return_Perc: {} | Volume_Perc: {} | {}: {}\n".format(return_perc, vol_perc, self.metric, round(perf, 5)))
+        print("\n Return_Perc: {} | Volume_Perc: {} | {}: {}\n".format(return_thresh,volume_thresh, self.metric, round(perf, 5)))
     
         # Call the method with Python int values
         self.test_strategy(percentiles=(return_perc[0], return_perc[1], vol_perc[0], vol_perc[1]))
-        return return_perc,vol_perc
+        return return_thresh,volume_thresh
  
  ###############################################################################################
  #    add_sessions:

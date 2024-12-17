@@ -81,17 +81,17 @@ if __name__ == "__main__":
                 print("\nLast few rows of the data:")
                 print(backtester.data.tail())
                 
-            backtester.test_strategy(percentiles=(10, 20, 5, 20))
+            backtester.test_strategy(percentiles=(10, 90, 5, 95))
             backtester.plot_strategy_comparison()
             backtester.plot_results_II()
             backtester.plot_heatmap()
             backtester.results.trades.value_counts()
 
             # Optimize PV strategy
-            return_low_range=(2, 15, 2)
-            return_high_range=(15, 30, 2) 
-            vol_low_range=(2, 20, 2) 
-            vol_high_range=(20, 50, 2)
+            return_low_range=(5, 15, 2)
+            return_high_range=(85, 95, 2) 
+            vol_low_range=(2, 10, 2) 
+            vol_high_range=(85, 95, 2)
             metric="Sharpe"
             return_thresh , volume_thresh = backtester.optimize_strategy(return_low_range,return_high_range,vol_low_range,vol_high_range,metric)
             backtester.results.position.value_counts()
@@ -116,8 +116,8 @@ if __name__ == "__main__":
 
             # Optimize SMA strategy
             SMA_S_range = (10, 20, 2)
-            SMA_M_range = (30, 50, 4)
-            SMA_L_range = (100, 200, 5)
+            SMA_M_range = (30, 60, 5)
+            SMA_L_range = (100, 300, 10)
             metric = "Sharpe"
             sma_s, sma_m, sma_l = backtester.optimize_strategy(SMA_S_range, SMA_M_range, SMA_L_range, metric)
 
@@ -158,19 +158,14 @@ if __name__ == "__main__":
     
             # Run the MACD backtest with the initial parameters
             backtester.test_strategy(macd_slow, macd_fast, macd_signal)
-            # Plot strategy performance comparison
             backtester.plot_strategy_comparison()
-            # Apply leverage and re-evaluate strategy
             backtester.add_leverage(leverage=leverage)
-            # Plot strategy performance comparison with leverage
             backtester.plot_strategy_comparison(leverage=True)
     
-            # Output the count of trades
             print(backtester.results.trades.value_counts())
-            # Optimize MACD strategy parameters
-            macd_slow_range = (26, 60, 2)     # Range for slow moving average
-            macd_fast_range = (5, 15, 1)      # Range for fast moving average
-            macd_signal_range = (5, 15, 1)    # Range for signal line
+            macd_slow_range = (20, 50, 5)     # Range for slow moving average
+            macd_fast_range = (5, 20, 3)      # Range for fast moving average
+            macd_signal_range = (5, 20, 3)    # Range for signal line
             metric = "Sharpe"                 # Metric to optimize for
     
             # Run optimization for the MACD strategy
@@ -192,7 +187,7 @@ if __name__ == "__main__":
     
             # Optimize VWAP strategy
             vwap_period_range = (20, 50, 5)  # Example range for VWAP period
-            vwap_threshold_range = (0.1, 2.0, 0.1)  # Example range for VWAP threshold
+            vwap_threshold_range = (0.1, 1.0, 0.1)  # Example range for VWAP threshold
             metric = "Sharpe"
             vwap_period, vwap_threshold = backtester.optimize_strategy(vwap_period_range, vwap_threshold_range, metric)
 
@@ -220,8 +215,8 @@ if __name__ == "__main__":
             if strategy == "PV":
                 print("\nSIMPLE PRICE & VOLUME STRATEGY")
                 if not Perform_Testing:
-                    return_thresh = [-0.005,  0.005]
-                    volume_thresh = [-3.0  , 3.0 ]
+                    return_thresh = [-0.008,  0.008]
+                    volume_thresh = [-2.0  , 2.0 ]
                 print(f"\n return_thresh ={return_thresh}, volume_thresh ={volume_thresh}")
                 trader = FuturesTrader(client=client, symbol=symbol, bar_length=bar_length,
                                     return_thresh=return_thresh, volume_thresh=volume_thresh,

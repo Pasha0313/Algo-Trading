@@ -156,6 +156,7 @@ class Futures_Backtester_MACD():
 
             plt.title(title)
             plt.legend()
+            plt.xticks(rotation=45)  
             save_path = "strategy_comparison.png"
             plt.savefig(save_path)
             print(f"Plot saved to {save_path}")
@@ -191,14 +192,22 @@ class Futures_Backtester_MACD():
 
         # Set plot title based on strategy type
         plt.title('MACD Strategy Backtest')
+        plt.xticks(rotation=45)  
         # Show plot
         plt.show()
         plt.close(fig)  # Close the figure to free up resources
 
 
-    def optimize_strategy(self, macd_slow_range, macd_fast_range, macd_signal_range):
-        ''' Optimizes the MACD strategy parameters. '''
+    def optimize_strategy(self, macd_slow_range, macd_fast_range, macd_signal_range, metric="Multiple"):
+        print("\nOptimize Strategy is running. \n")
         
+        self.metric = metric
+        
+        if metric == "Multiple":
+            performance_function = self.calculate_multiple
+        elif metric == "Sharpe":
+            performance_function = self.calculate_sharpe
+
         macd_slow_range = range(*macd_slow_range)
         macd_fast_range = range(*macd_fast_range)
         macd_signal_range = range(*macd_signal_range)
@@ -209,7 +218,7 @@ class Futures_Backtester_MACD():
         for comb in combinations:
             self.prepare_data(macd_slow=comb[0], macd_fast=comb[1], macd_signal=comb[2])
             self.run_backtest()
-            performance.append(self.results['strategy'].sum())
+            performance.append(performance_function(self.results.strategy))
         
         self.results_overview = pd.DataFrame(data=np.array(combinations), columns=["macd_slow", "macd_fast", "macd_signal"])
         self.results_overview["performance"] = performance
@@ -266,17 +275,6 @@ class Futures_Backtester_MACD():
             plt.close(fig)  # Close the figure to free up resources
 
     def add_leverage(self, leverage, report = True): # NEW!!!
-        ''' 
-        Adds Leverage to the Strategy.
-        
-        Parameter
-        ============
-        leverage: float (positive)
-            degree of leverage.
-        
-        report: bool, default True
-            if True, print Performance Report incl. Leverage.
-        '''
         self.add_sessions()
         self.leverage = leverage
         

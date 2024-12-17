@@ -168,7 +168,7 @@ class Futures_Backtester_VWAP():
             if leverage:
                 cstrategy_levered = self.results["cstrategy_levered"].to_numpy()
                 plt.plot(index, cstrategy_levered, label="Strategy leverage")
-                
+            plt.xticks(rotation=45)      
             plt.title(title)
             plt.legend()
             save_path = "strategy_comparison.png"
@@ -201,7 +201,7 @@ class Futures_Backtester_VWAP():
         ax2.plot(self.results.index, self.results['Total'], label='Strategy Returns', color='r')
         ax2.set_ylabel('Portfolio Value')
         ax2.legend(loc='best')
-    
+        plt.xticks(rotation=45)  
         plt.title('VWAP Strategy Backtest')
         plt.show()
 
@@ -215,13 +215,11 @@ class Futures_Backtester_VWAP():
         elif metric == "Sharpe":
             performance_function = self.calculate_sharpe
     
-        # Ensure that ranges are integers
         vwap_period_range = range(*vwap_period_range)
+        vwap_threshold_range = np.arange(vwap_threshold_range[0], vwap_threshold_range[1], vwap_threshold_range[2])  # For float ranges
+        #vwap_threshold_range = range(*vwap_threshold_range)
+        #vwap_threshold_range = [x / 100.0 for x in range(*vwap_threshold_range)]
     
-        # Convert threshold range to float values
-        vwap_threshold_range = [x / 100.0 for x in range(*vwap_threshold_range)]
-    
-        # Generate combinations of parameters
         combinations = list(product(vwap_period_range, vwap_threshold_range))
     
         performance = []
@@ -279,6 +277,7 @@ class Futures_Backtester_VWAP():
             ax.set_ylabel("Compound Returns")
             ax.set_title("VWAP Strategy: Compound Returns Over Time")
             plt.tight_layout()
+            plt.xticks(rotation=45)  
             save_path = "With_leverage.png"
             plt.savefig(save_path)
             print(f"Plot saved to {save_path}")

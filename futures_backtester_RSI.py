@@ -124,7 +124,6 @@ class Futures_Backtester_RSI():
     def run_backtest(self):
         ''' Runs the strategy backtest.
         '''
-
         data = self.results.copy()
         data["strategy"] = data["position"].shift(1) * data["returns"]
         data["trades"] = data.position.diff().fillna(0).abs()
@@ -183,7 +182,7 @@ class Futures_Backtester_RSI():
         ax2.plot(self.results.index, self.results['Total'], label='Strategy Returns', color='r')
         ax2.set_ylabel('Portfolio Value')
         ax2.legend(loc='best')
- 
+        plt.xticks(rotation=45)  
         plt.title('RSI Strategy Backtest')
         plt.show()
 
@@ -209,9 +208,7 @@ class Futures_Backtester_RSI():
         for comb in combinations:
             self.prepare_data(rsi_window=comb[0], rsi_lower=comb[1], rsi_upper=comb[2])
             self.run_backtest()
-            perf_value = performance_function(self.results.strategy)
-            performance.append(perf_value)
-            print(f"Combination: {comb} | Performance: {perf_value}")
+            performance.append(performance_function(self.results.strategy))
 
         self.results_overview = pd.DataFrame(data=np.array(combinations), columns=["rsi_window", "rsi_lower", "rsi_upper"])
         self.results_overview["performance"] = performance
@@ -252,6 +249,7 @@ class Futures_Backtester_RSI():
             ax.set_ylabel("Compound Returns")
             ax.set_title("Compound Returns Over Time")
             plt.tight_layout()
+            plt.xticks(rotation=45)  
             save_path = "With_leverage.png"
             plt.savefig(save_path)
             print(f"Plot saved to {save_path}")
