@@ -75,7 +75,7 @@ def prepare_trade_from_config(config):
     loading_from_date = Today - history_days
     trading_period = timedelta(hours=trade_hours)
     stop_trade_date = Today + trading_period
-
+    
     # Prepare trade data
     trade_data = [
         ["Minimum Future Trade Value", f"{minimum_future_trade_value:.2f}"],

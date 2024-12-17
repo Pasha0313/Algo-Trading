@@ -73,10 +73,39 @@ class FuturesTrader:
             self.twm.join()
       
     def get_most_recent(self, symbol, interval, days):
+        start_str =  str(days)
+        end_str = None
+        current_start_str = start_str
+        all_bars = []  
+        previous_candles_count = 0  
+        print("\n")
+        while True:
+            # Fetch a chunk of data (up to 1000 candles)
+            print(f"Requesting data from {pd.to_datetime(current_start_str).strftime('%Y-%m-%d %H:%M')}...")
+            bars = self.client.futures_historical_klines(symbol = symbol, interval = interval,
+                start_str=current_start_str,end_str = end_str,limit=1000)
+            if not bars:
+               print("No more data available or the API limit has been reached.")
+               break
+            all_bars.extend(bars)
+            last_timestamp = pd.to_datetime(bars[-1][0], unit="ms")
+            current_start_str = (last_timestamp + pd.Timedelta(milliseconds=1)).strftime('%Y-%m-%d %H:%M')
+            print(f"Collected {len(all_bars)} candles so far...")
+            if len(all_bars) == previous_candles_count + 1:
+                #print("Only one new candle collected, exiting loop.")
+                break
+            previous_candles_count = len(all_bars)
+            # Add delay to avoid hitting the API rate limit
+            time.sleep(1)
+
+        print(f"Total of {len(all_bars)} candles collected.\n")
+
+        df = pd.DataFrame(all_bars)
+        
+        #bars = self.client.futures_historical_klines(symbol = symbol, interval = interval,
+        #                                    start_str = str(days), end_str = None, limit = 1000) # Adj: futures_historical_klines
+        #df = pd.DataFrame(bars)
     
-        bars = self.client.futures_historical_klines(symbol = symbol, interval = interval,
-                                            start_str = str(days), end_str = None, limit = 1000) # Adj: futures_historical_klines
-        df = pd.DataFrame(bars)
         df["Date"] = pd.to_datetime(df.iloc[:,0], unit = "ms")
 
         # Get the start and end dates
@@ -84,7 +113,7 @@ class FuturesTrader:
         end_date = df['Date'].max().strftime('%Y-%m-%d %H:%M')
 
         # Print the start and end dates
-        print(f"Dataset Start from : {start_date}, End at: {end_date}")
+        print(f"Dataset Start from : {start_date}, End at: {end_date} \n")
 
         df.columns = ["Open Time", "Open", "High", "Low", "Close", "Volume",
                       "Clos Time", "Quote Asset Volume", "Number of Trades",

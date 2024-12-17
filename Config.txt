@@ -1,12 +1,12 @@
 ########################################
 ############      Main       ###########
 ########################################
-symbol=ETHUSDT
-bar_length=15m
+symbol=BTCUSDT
+bar_length=5m
 leverage=5
-strategy=PV
+strategy=RSI
 tc=-0.00085
-test_days=365
+test_days=60
 
 ########################################
 ############     Control     ###########
@@ -18,10 +18,10 @@ Perform_Trading=True
 ########################################
 ############   Trading Config  #########
 ########################################
-history_days=180
-trade_hours=24
+history_days=10
+trade_hours=12
 minimum_future_trade_value=100
 trade_value=500.0
-n_trades=50
+n_trades=10
 position=0
 stop_loss_pct=0.02

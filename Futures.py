@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore")
 
 
 # Define the path
-PATH = r'C:\DATA\Trading\V1.9\Futures'
+PATH = r'C:\DATA\Trading\V1.10\Futures'
 
 # Load configuration using os.path.join to concatenate the path and file name
 
@@ -202,7 +202,7 @@ if __name__ == "__main__":
     if Perform_Trading:
         # Prepare trade parameters
         loading_from_date,Today,stop_trade_date, minimum_future_trade_value, trade_value, n_trades, position, stop_loss_pct = prepare_trade_from_config(config)
-
+        
         print("\nStart Trading")
         #print(f"\nTrade will continue from: {Today}, until: {stop_trade_date}, Max number of trades is: {n_trades}")
 
@@ -226,7 +226,8 @@ if __name__ == "__main__":
                 trader = FuturesTrader(client=client, symbol=symbol, bar_length=bar_length,
                                     return_thresh=return_thresh, volume_thresh=volume_thresh,
                                     units=units, position=position, leverage=leverage,
-                                    stop_trade_date=stop_trade_date, strategy=strategy, stop_loss_pct=stop_loss_pct, n_trades=n_trades)
+                                    stop_trade_date=stop_trade_date, strategy=strategy, 
+                                    stop_loss_pct=stop_loss_pct, n_trades=n_trades)
             
             elif strategy == "SMA":
                 print("\nSimple Moving Average Strategy")
@@ -238,7 +239,8 @@ if __name__ == "__main__":
                 trader = FuturesTrader(client=client, symbol=symbol, bar_length=bar_length,
                             sma_s=sma_s, sma_m=sma_m, sma_l=sma_l,
                             units=units, position=position, leverage=leverage,
-                            stop_trade_date=stop_trade_date, strategy=strategy, stop_loss_pct=stop_loss_pct, n_trades=n_trades)
+                            stop_trade_date=stop_trade_date, strategy=strategy, 
+                            stop_loss_pct=stop_loss_pct, n_trades=n_trades)
 
             elif strategy == "RSI":
                 print("\nRelative Strength Index")
@@ -250,7 +252,8 @@ if __name__ == "__main__":
                 trader = FuturesTrader(client=client, symbol=symbol, bar_length=bar_length,
                             rsi_window=rsi_window, rsi_lower=rsi_lower, rsi_upper=rsi_upper,
                             units=units, position=position, leverage=leverage,
-                            stop_trade_date=stop_trade_date, strategy=strategy, stop_loss_pct=stop_loss_pct, n_trades=n_trades)
+                            stop_trade_date=stop_trade_date, strategy=strategy, 
+                            stop_loss_pct=stop_loss_pct, n_trades=n_trades)
             
             elif strategy == "MACD":
                 print("\nMoving Average Convergence Divergence (MACD)")
@@ -276,7 +279,8 @@ if __name__ == "__main__":
                 trader = FuturesTrader(client=client, symbol=symbol, bar_length=bar_length,
                                        vwap_period=vwap_period, vwap_threshold=vwap_threshold,
                                        units=units, position=position, leverage=leverage,
-                                       stop_trade_date=stop_trade_date, strategy=strategy, stop_loss_pct=stop_loss_pct, n_trades=n_trades)
+                                       stop_trade_date=stop_trade_date, strategy=strategy, 
+                                       stop_loss_pct=stop_loss_pct, n_trades=n_trades)
 
 
             trader.start_trading(historical_days=loading_from_date)

@@ -58,7 +58,7 @@ class Futures_Backtester_RSI():
             print(f"Collected {len(all_bars)} candles so far...")
             
             if len(all_bars) == previous_candles_count + 1:
-                print("Only one new candle collected, exiting loop.")
+                #print("Only one new candle collected, exiting loop.")
                 break
             previous_candles_count = len(all_bars)
 
