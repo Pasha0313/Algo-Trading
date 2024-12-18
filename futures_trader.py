@@ -12,7 +12,7 @@ import ta
 class FuturesTrader:
     
     def __init__(self, client, symbol, bar_length, units, stop_trade_date, stop_loss_pct,
-                 return_thresh= [-0.003, 0.003], volume_thresh=[-3, 3],
+                 return_thresh= [-0.005, 0.005], volume_thresh=[-2, 2],
                  sma_s = 15,sma_m=50, sma_l=200,
                  rsi_window=14, rsi_lower=30, rsi_upper=70,
                  macd_s = 12,macd_l = 26,macd_smooth = 9,

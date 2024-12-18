@@ -8,6 +8,7 @@ from tkinter import TRUE
 from requests.exceptions import ConnectionError, Timeout, RequestException
 from binance.client import Client
 from futures_trader import FuturesTrader
+#from Futures_Backtester_Base import FuturesBacktesterBase
 from futures_backtester_PV import Futures_Backtester_PV
 from futures_backtester_SMA import Futures_Backtester_SMA
 from futures_backtester_RSI import Futures_Backtester_RSI
@@ -20,9 +21,8 @@ from tabulate import tabulate
 import warnings
 warnings.filterwarnings("ignore")
 
-
 # Define the path
-PATH = r'C:\DATA\Trading\V1.10\Futures'
+PATH = r'C:\DATA\Trading\V1.11\Futures'
 
 # Load configuration using os.path.join to concatenate the path and file name
 
@@ -80,12 +80,12 @@ if __name__ == "__main__":
                 print(backtester.data.head())
                 print("\nLast few rows of the data:")
                 print(backtester.data.tail())
-                
-            backtester.test_strategy(percentiles=(10, 90, 5, 95))
-            backtester.plot_strategy_comparison()
-            backtester.plot_results_II()
-            backtester.plot_heatmap()
-            backtester.results.trades.value_counts()
+            
+            percentiles=(10, 90, 5, 95)    
+            backtester.test_strategy(percentiles)
+            backtester.add_leverage(leverage=leverage)
+            backtester.plot_strategy_comparison(leverage=True)
+            print(backtester.results.trades.value_counts())
 
             # Optimize PV strategy
             return_low_range=(5, 15, 2)
@@ -94,25 +94,17 @@ if __name__ == "__main__":
             vol_high_range=(85, 95, 2)
             metric="Sharpe"
             return_thresh , volume_thresh = backtester.optimize_strategy(return_low_range,return_high_range,vol_low_range,vol_high_range,metric)
-            backtester.results.position.value_counts()
-            backtester.results.trades.value_counts()
-            backtester.add_leverage(leverage=leverage) 
-            backtester.plot_strategy_comparison(leverage=True)
-
 
         elif strategy == "SMA":
             print("\nSimple Moving Average Strategy")
-            SMA = (15, 50, 200)  # (sma_s, sma_m, sma_l)
             backtester = Futures_Backtester_SMA(client=client, symbol=symbol, bar_length=bar_length,
                                                 start=start_date, end=end_date, tc=tc,
                                                 leverage=leverage, strategy=strategy)
-            
+            SMA = (15, 50, 200)  # (sma_s, sma_m, sma_l)            
             backtester.test_strategy(SMA)
             backtester.add_leverage(leverage=leverage)
             backtester.plot_strategy_comparison(leverage=True)
-            backtester.results.trades.value_counts()
-            backtester.results.eff_lev.describe()
-            backtester.results.eff_lev.plot(figsize=(6, 4))
+            print(backtester.results.trades.value_counts())
 
             # Optimize SMA strategy
             SMA_S_range = (10, 20, 2)
@@ -123,67 +115,55 @@ if __name__ == "__main__":
 
         elif strategy == "RSI":
             print("\nRelative Strength Index")
-            rsi_window = 14
-            rsi_lower = 30
-            rsi_upper = 70
             backtester = Futures_Backtester_RSI(client=client, symbol=symbol, bar_length=bar_length,
                                                 start=start_date, end=end_date, tc=tc,
                                                 leverage=leverage, strategy=strategy)
-            
+            rsi_window = 14
+            rsi_lower = 40
+            rsi_upper = 60
             backtester.test_strategy(rsi_window, rsi_lower, rsi_upper)
-            backtester.plot_strategy_comparison()
             backtester.add_leverage(leverage=leverage)
             backtester.plot_strategy_comparison(leverage=True)
-            backtester.results.trades.value_counts()
+            print(backtester.results.trades.value_counts())
             
             # Optimize RSI strategy
             rsi_window_range = (9, 15, 1)
-            rsi_lower_range = (15, 30, 5)
-            rsi_upper_range = (70, 85, 5)
+            rsi_lower_range = (15, 40, 5)
+            rsi_upper_range = (60, 85, 5)
             metric = "Sharpe"
             rsi_window,rsi_lower,rsi_upper = backtester.optimize_strategy(rsi_window_range, rsi_lower_range, rsi_upper_range, metric)
 
         elif strategy == "MACD":
             print("\nMoving Average Convergence Divergence (MACD)")
-
-            # Define default MACD parameters
-            macd_slow = 26   # Slow moving average window
-            macd_fast = 12   # Fast moving average window
-            macd_signal = 9  # Signal line window
-    
             # Initialize the MACD backtester
             backtester = Futures_Backtester_MACD(client=client,symbol=symbol,bar_length=bar_length,
                                                 start=start_date,end=end_date,tc=tc,
                                                 leverage=leverage,strategy=strategy)
-    
-            # Run the MACD backtest with the initial parameters
+            macd_slow = 26   # Slow moving average window
+            macd_fast = 12   # Fast moving average window
+            macd_signal = 9  # Signal line window    
             backtester.test_strategy(macd_slow, macd_fast, macd_signal)
-            backtester.plot_strategy_comparison()
             backtester.add_leverage(leverage=leverage)
             backtester.plot_strategy_comparison(leverage=True)
-    
             print(backtester.results.trades.value_counts())
+
             macd_slow_range = (20, 50, 5)     # Range for slow moving average
             macd_fast_range = (5, 20, 3)      # Range for fast moving average
             macd_signal_range = (5, 20, 3)    # Range for signal line
             metric = "Sharpe"                 # Metric to optimize for
-    
-            # Run optimization for the MACD strategy
             macd_slow, macd_fast, macd_signal = backtester.optimize_strategy(macd_slow_range,macd_fast_range,macd_signal_range,metric)
             
         elif strategy == "VWAP":
             print("\nVolume Weighted Average Price")
-            vwap_period = 14
-            vwap_threshold = 0.1
             backtester = Futures_Backtester_VWAP(client=client,symbol=symbol,bar_length=bar_length,
                                                 start=start_date,end=end_date,tc=tc,
                                                 leverage=leverage,strategy=strategy)
-    
+            vwap_period = 14
+            vwap_threshold = 0.1    
             backtester.test_strategy(vwap_period,vwap_threshold)
-            backtester.plot_strategy_comparison()
             backtester.add_leverage(leverage=leverage)
             backtester.plot_strategy_comparison(leverage=True)
-            backtester.results.trades.value_counts()
+            print(backtester.results.trades.value_counts())
     
             # Optimize VWAP strategy
             vwap_period_range = (20, 50, 5)  # Example range for VWAP period

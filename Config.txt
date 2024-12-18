@@ -3,10 +3,10 @@
 ########################################
 symbol=BTCUSDT
 bar_length=15m
-leverage=5
+leverage=2
 strategy=VWAP
 tc=-0.00085
-test_days=10
+test_days=20
 
 ########################################
 ############     Control     ###########
