@@ -101,10 +101,6 @@ class FuturesTrader:
         print(f"Total of {len(all_bars)} candles collected.\n")
 
         df = pd.DataFrame(all_bars)
-        
-        #bars = self.client.futures_historical_klines(symbol = symbol, interval = interval,
-        #                                    start_str = str(days), end_str = None, limit = 1000) # Adj: futures_historical_klines
-        #df = pd.DataFrame(bars)
     
         df["Date"] = pd.to_datetime(df.iloc[:,0], unit = "ms")
 
@@ -160,9 +156,7 @@ class FuturesTrader:
             # print out
             print(".", end = "", flush = True) # just print something to get a feedback (everything OK) 
             if ((event_time.minute % 10 == 0) and (event_time.second == 0)): print(f"\nTime : {event_time.strftime('%Y-%m-%d %H:%M')}, Trade Number = {self.trades}")
-            #new_data = [first, high, low, close, volume, complete]
-            #self.data.loc[start_time] = pd.Series(new_data, index=self.data.columns)
-            # feed df (add new bar / update latest bar)
+
             self.data.loc[start_time] = [first, high, low, close, volume, complete]
 
             if complete == True:
@@ -273,23 +267,17 @@ class FuturesTrader:
             # Calculate MACD and Signal line using TA-lib or pandas
             data = self.data[["Close"]].copy()
 
-            # Calculate Short-term EMA, Long-term EMA, MACD line, and Signal line
-            data['EMA_short'] = data['Close'].ewm(span=self.macd_s, adjust=False).mean()
-            data['EMA_long'] = data['Close'].ewm(span=self.macd_l, adjust=False).mean()
-            data['MACD'] = data['EMA_short'] - data['EMA_long']
-            data['Signal'] = data['MACD'].ewm(span=self.macd_smooth, adjust=False).mean()
+            data['MACD'] = ta.trend.macd(data['Close'], window_slow=self.macd_s, window_fast=self.macd_l)
+            data['MACD_Signal'] = ta.trend.macd_signal(data['Close'], window_slow=self.macd_s, window_fast=self.macd_l, window_sign=macd_smooth)
 
-            # Initialize position column
-            data['position'] = 0
+            cond1 = (data['MACD'] > data['MACD_Signal'])
+            cond2 = (data['MACD'] < data['MACD_Signal'])
 
-            # Generate trading signals
-            cond1 = (data['MACD'] > data['Signal'])  # Bullish crossover
-            cond2 = (data['MACD'] < data['Signal'])  # Bearish crossover
-
-            data.loc[cond1, 'position'] = 1  # Buy signal
-            data.loc[cond2, 'position'] = -1  # Sell signal
-
+            data['position'] = 0  
+            data.loc[cond1, 'position'] = 1  
+            data.loc[cond2, 'position'] = -1  
             self.prepared_data = data.copy()  # Save prepared data
+            
         except ValueError as e:
             warning_message = str(e)
             warnings.warn(warning_message, UserWarning)
@@ -300,22 +288,16 @@ class FuturesTrader:
             if not hasattr(self, 'data') or self.data is None:
                 raise ValueError("Data is not initialized")
 
-            # Calculate VWAP
-            data = self.data[["Close", "Volume"]].copy()
-            data['VWAP'] = ta.volume.volume_weighted_average_price(
-                data['Close'], data['Volume'], window=self.vwap_period
-            )
-
-            # Initialize position column
+            data = self.data[["High","Low","Close", "Volume"]].copy()
+            # Calculate the VWAP using the correct keyword arguments
+            data['VWAP'] = ta.volume.volume_weighted_average_price(data['High'], data['Low'],data['Close'], data['Volume'],int(self.vwap_period))  
+    
+            cond1 = (data['Close'] > data['VWAP'] + self.vwap_threshold)
+            cond2 = (data['Close'] < data['VWAP'] - self.vwap_threshold)
+    
             data['position'] = 0
-        
-            # Define trading signals based on VWAP
-            # Example condition: buy when the close price is above VWAP + threshold, sell when below VWAP - threshold
-            buy_signal = data['Close'] > (data['VWAP'] + self.vwap_threshold)
-            sell_signal = data['Close'] < (data['VWAP'] - self.vwap_threshold)
-
-            data.loc[buy_signal, "position"] = 1
-            data.loc[sell_signal, "position"] = -1
+            data.loc[cond1, "position"] = 1
+            data.loc[cond2, "position"] = -1
 
             self.prepared_data = data.copy()
         except ValueError as e:
