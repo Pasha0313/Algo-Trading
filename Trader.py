@@ -5,8 +5,8 @@ import time
 
 class FuturesTrader:
     
-    def __init__(self, client, symbol, bar_length, units, stop_trade_date, stop_loss_pct,parameters,
-                 n_trades =100, position=0, leverage=5, strategy="PV"):        
+    def __init__(self, client, symbol, bar_length, units, stop_trade_date, Total_stop_loss,stop_loss_pct,parameters,
+                 TN_trades =100, position=0, leverage=5, strategy="PV"):        
         
         self.client = client  
         self.symbol = symbol
@@ -16,17 +16,22 @@ class FuturesTrader:
         self.position = position
         self.leverage = leverage
         self.cum_profits = 0 
-        self.trades = 0 
-        self.n_trades = n_trades 
+        self.eff_cum_profits = 0     
+        self.N_trades = 0 
+        self.TN_trades = TN_trades 
         self.strategy = strategy
         self.stop_date = stop_trade_date
+        self.Total_stop_loss = Total_stop_loss 
         self.stop_loss_pct = stop_loss_pct 
         self.K=0
+        self.Rep_Trade = pd.DataFrame()
         #*****************add strategy-specific attributes here******************
         self.parameters = parameters
         
         # Stop loss parameters
         self.stop_loss_price = None
+        self.current_price = None
+        self.filled_quantity = None
     
     def start_trading(self,historical_days):
         self.client.futures_change_leverage(symbol = self.symbol, leverage = self.leverage) 
@@ -100,48 +105,42 @@ class FuturesTrader:
         close   = float(msg["k"]["c"])
         volume  = float(msg["k"]["v"])
         complete=       msg["k"]["x"]
+ 
+        # Stop trading session
+        if event_time >= self.stop_date or self.N_trades >= self.TN_trades:
+            if self.position == 1:  # Long position
+                order = self.client.futures_create_order(symbol=self.symbol, side="SELL", type="MARKET", quantity= self.units ) #self.filled_units)
+                self.report_trade(order, f"Stop Trading !... GOING NEUTRAL, Quantity: {self.filled_units}")
+                self.position = 0
+            elif self.position == -1:  # Short position
+                order = self.client.futures_create_order(symbol=self.symbol, side="BUY", type="MARKET", quantity= self.units ) #self.filled_units)
+                self.report_trade(order, f"Stop Trading !... GOING NEUTRAL, Quantity: {self.filled_units}")
+                self.position = 0
+            else:
+                print("No open positions to close.")
 
-        # stop trading session        
-        if event_time >= self.stop_date or self.trades >= self.n_trades:
-            if self.position == 1:  
-                try:
-                    order = self.client.futures_create_order(symbol=self.symbol,side="SELL",type="MARKET",quantity=self.units)
-                    self.report_trade(order, "GOING NEUTRAL AND STOP")
-                    self.position = 0
-                except Exception as e:
-                    print(f"Error closing long position: {e}")
-
-            elif self.position == -1: 
-                try:
-                    order = self.client.futures_create_order(symbol=self.symbol,side="BUY",type="MARKET",quantity=self.units)
-                    self.report_trade(order, "GOING NEUTRAL AND STOP")
-                    self.position = 0
-                except Exception as e:
-                    print(f"Error closing short position: {e}")
-
+            # Print stopping reason
             if event_time >= self.stop_date:
                 print("Streaming Halted Due to Time Limit")
-            elif self.trades >= self.n_trades:
+            elif self.N_trades >= self.TN_trades:
                 print("Streaming Halted Due to Trade Number Limit")
 
-            time.sleep(10) 
+            # Gracefully stop the trading manager
+            time.sleep(10)
             self.twm.stop()
-
         else:
-            # print out
-            print(".", end = "", flush = True) # just print something to get a feedback (everything OK) 
-            # if ((event_time.minute % 10 == 0) and (event_time.second == 0)): 
-            # Increment K and print every 100 trades
-            self.K += 1
-            if self.K == 150:
-                print(f"\nTime : {event_time.strftime('%Y-%m-%d %H:%M')}, Trade Number = {self.trades}")
-                df = self.data.copy().tail(1).iloc[:, :].copy()
-                print('\n',df)
-                self.K = 0  # Reset K to 0 after printing
-
             self.data.loc[start_time] = [first, high, low, close, volume, complete]
             data = self.data.copy()
-            if complete:
+
+            print(".", end = "", flush = True) # just print something to get a feedback (everything OK) 
+            self.K += 1
+            if self.K == 150:
+                self.K = 0
+                print(f"\nTime: {event_time.strftime('%Y-%m-%d %H:%M')}, Trade Number = {self.N_trades}, Price = {data['Close'].iloc[-1]}, Volume = {data['Volume'].iloc[-1]}")
+                #df = self.data.copy().tail(1).iloc[:, :].copy()
+                #print('\n',df)
+
+            if complete: # I need to think about this part
                 if self.strategy == "PV":  # 0. **Simple Price and Volume**
                     self.prepared_data = strategy.define_strategy_PV(data, self.parameters)
                 elif self.strategy == "SMA":  # 1. **Simple Moving Average**
@@ -344,53 +343,85 @@ class FuturesTrader:
                     self.prepared_data = strategy.define_strategy_Bollinger_Stochastic_RSI(data, self.parameters)
                 elif self.strategy == "Trend_Reversal_RSI":  # 100. **Trend Reversal with RSI**
                     self.prepared_data = strategy.define_strategy_Trend_Reversal_RSI(data, self.parameters)
-                self.execute_trades()
+                elif self.strategy == "Volume_Profile":  # 101. **Volume Profile Strategy**
+                    self.prepared_data = strategy.define_strategy_Volume_Profile(data, self.parameters) 
+                elif self.strategy == "Grid_Trading":  # 102. **Grid Trading Strategy**
+                    self.prepared_data = strategy.define_strategy_Grid_Trading(data, self.parameters)                                          
+                elif self.strategy == "EMA_MACD_ADX":  # 103. **EMA + MACD + ADX Hybrid Strategy**
+                    self.prepared_data = strategy.define_strategy_EMA_MACD_ADX(data, self.parameters) 
+                elif self.strategy == "Trend_Momentum_Volatility":  # 104. **EMA + MACD + ADX + ATR Stochastic + RSI Hybrid Strategy **
+                    self.prepared_data = strategy.define_strategy_Trend_Momentum_Volatility(data, self.parameters)                                          
+                elif self.strategy == "Stochastic_RSI_Bollinger_VWAP":  # 105. ** Stochastic RSI Bollinger VWAP Hybrid Strategy **
+                    self.prepared_data = strategy.define_strategy_Stochastic_RSI_Bollinger_VWAP(data, self.parameters)       
+                elif self.strategy == "Stochastic_RSI_FULL":  #106. ** Stochastic RSI Strategy with %K and %D smoothing **
+                    self.prepared_data = strategy.define_strategy_Stochastic_RSI_FULL(data, self.parameters) 
+                elif self.strategy == "Gaussian_Channel_FULL":  #107. **  Gaussian Channel strategy **
+                    self.prepared_data = strategy.define_strategy_Gaussian_Channel_FULL(data, self.parameters) 
+                elif self.strategy == "Combined_Gaussian_Stochastic_RSI_FULL":  #108. ** combined the Gaussian Channel and Stochastic RSI strategies **
+                    self.prepared_data = strategy.define_strategy_Combined_Gaussian_Stochastic_RSI_FULL(data, self.parameters) 
+                self.execute_trades()                                                                           
    
-    def execute_trades(self):  
-        if self.prepared_data["position"].iloc[-1] == 1: # if position is long -> go/stay long
-            if self.position == 0:
+    def execute_trades(self):
+        # Current Price
+        self.current_price = self.prepared_data["Close"].iloc[-1]
+        self.Total_stop_loss = self.current_price * self.stop_loss_pct
+        #print (f'Execute Position is : {self.prepared_data["position"].iloc[-1]}')
+        # Long Position Logic
+        if self.prepared_data["position"].iloc[-1] == 1:  # Signal to go/stay long
+            # Stop Loss 
+            self.stop_loss_price = round(self.current_price - self.Total_stop_loss,5)
+            #print(f"\nstop_loss_price : {self.stop_loss_price} = Current_price : {self.current_price} - Total_stop_loss : {self.Total_stop_loss}")
+            if self.position == 0:  # Neutral -> Long
                 order = self.client.futures_create_order(symbol=self.symbol, side="BUY", type="MARKET", quantity=self.units)
-                self.report_trade(order, "GOING LONG")  
-                self.stop_loss_price = self.prepared_data["Close"].iloc[-1] * (1 - self.stop_loss_pct)
-            elif self.position == -1:
+                self.report_trade(order, f"GOING LONG, Quantity: {self.units}")
+                self.position = 1
+            elif self.position == -1:  # Short -> Long
                 order = self.client.futures_create_order(symbol=self.symbol, side="BUY", type="MARKET", quantity=2 * self.units)
-                self.report_trade(order, "GOING LONG")
-                self.stop_loss_price = self.prepared_data["Close"].iloc[-1] * (1 - self.stop_loss_pct)
-            self.position = 1
-        elif self.prepared_data["position"].iloc[-1] == 0: # if position is neutral -> go/stay neutral
-            if self.position == 1:
-                order = self.client.futures_create_order(symbol=self.symbol, side="SELL", type="MARKET", quantity=2 * self.units)
-                self.report_trade(order, "GOING NEUTRAL") 
-                self.stop_loss_price = self.prepared_data["Close"].iloc[-1] * (1 + self.stop_loss_pct)
-            elif self.position == -1:
-                order = self.client.futures_create_order(symbol=self.symbol, side="BUY", type="MARKET", quantity=2 * self.units)
-                self.report_trade(order, "GOING NEUTRAL") 
-                self.stop_loss_price = self.prepared_data["Close"].iloc[-1] * (1 - self.stop_loss_pct)   
-            self.position = 0
-        if self.prepared_data["position"].iloc[-1] == -1: # if position is short -> go/stay short
-            if self.position == 0:
+                self.report_trade(order, f"GOING LONG, Quantity: {self.units}")
+                self.position = 1
+
+        # Neutral Position Logic
+        elif self.prepared_data["position"].iloc[-1] == 0:  # Signal to go/stay neutral
+            if self.position == 1:  # Long -> Neutral
+                order = self.client.futures_create_order(symbol=self.symbol, side="SELL", type="MARKET", quantity= self.units ) 
+                self.report_trade(order, f"GOING NEUTRAL, Quantity: {self.units}")
+                self.stop_loss_price = None
+                self.position = 0
+            elif self.position == -1:  # Short -> Neutral
+                order = self.client.futures_create_order(symbol=self.symbol, side="BUY", type="MARKET", quantity=self.units ) 
+                self.report_trade(order, f"GOING NEUTRAL, Quantity: {self.units}")
+                self.stop_loss_price = None
+                self.position = 0
+
+        # Short Position Logic
+        elif self.prepared_data["position"].iloc[-1] == -1:  # Signal to go/stay short   (need to think)
+            print()
+            # Stop Loss 
+            self.stop_loss_price = round(self.current_price + self.Total_stop_loss,5)
+            #print(f"\nstop_loss_price : {self.stop_loss_price} = Current_price : {self.current_price} + Total_stop_loss : {self.Total_stop_loss}")                        
+            if self.position == 0:  # Neutral -> Short
                 order = self.client.futures_create_order(symbol=self.symbol, side="SELL", type="MARKET", quantity=self.units)
-                self.report_trade(order, "GOING SHORT")
-                self.stop_loss_price = self.prepared_data["Close"].iloc[-1] * (1 + self.stop_loss_pct)
-            elif self.position == 1:
+                self.report_trade(order, f"GOING SHORT, Quantity: {self.units}")
+                self.position = -1
+            elif self.position == 1:  # Long -> Short
                 order = self.client.futures_create_order(symbol=self.symbol, side="SELL", type="MARKET", quantity=2 * self.units)
-                self.report_trade(order, "GOING SHORT")
-                self.stop_loss_price = self.prepared_data["Close"].iloc[-1] * (1 + self.stop_loss_pct)
-            self.position = -1
-       
-        if self.position == 1 and self.prepared_data["Close"].iloc[-1] <= self.stop_loss_price:
+                self.report_trade(order, f"GOING SHORT, Quantity: {self.units}")
+                self.position = -1
+
+        # Stop-Loss Logic
+        if self.position == 1 and self.current_price <= self.stop_loss_price:  # Long position stop-loss
             order = self.client.futures_create_order(symbol=self.symbol, side="SELL", type="MARKET", quantity=self.units)
-            self.report_trade(order, "STOP LOSS HIT - CLOSING LONG POSITION")
+            self.report_trade(order, f"STOP LOSS HIT - CLOSING LONG POSITION, Quantity: {self.units}")
             self.position = 0
             self.stop_loss_price = None
-        elif self.position == -1 and self.prepared_data["Close"].iloc[-1] >= self.stop_loss_price:
+        elif self.position == -1 and self.current_price >= self.stop_loss_price:  # Short position stop-loss
             order = self.client.futures_create_order(symbol=self.symbol, side="BUY", type="MARKET", quantity=self.units)
-            self.report_trade(order, "STOP LOSS HIT - CLOSING SHORT POSITION")
+            self.report_trade(order, f"STOP LOSS HIT - CLOSING SHORT POSITION, Quantity: {self.units}")
             self.position = 0
             self.stop_loss_price = None
-   
+
     def report_trade(self, order, going):
-        self.trades += 1
+        self.N_trades += 1
         time.sleep(0.1)
         order_time = order["updateTime"]
         trades = self.client.futures_account_trades(symbol = self.symbol, startTime = order_time)
@@ -401,18 +432,30 @@ class FuturesTrader:
         columns = ["qty", "quoteQty", "commission","realizedPnl"]
         for column in columns:
             df[column] = pd.to_numeric(df[column], errors = "coerce")
+
         base_units = round(df.qty.sum(), 5)
         quote_units = round(df.quoteQty.sum(), 5)
         commission = -round(df.commission.sum(), 5)
         real_profit = round(df.realizedPnl.sum(), 5)
         price = round(quote_units / base_units, 5)
-        
+
+        self.filled_units = base_units
         # calculate cumulative trading profits
         self.cum_profits += round((commission + real_profit), 5)
-        
-        # print trade report
-        print(2 * "\n" + 100* "-")
-        print("{} | {}".format(order_time, going)) 
-        print("{} | Base_Units = {} | Quote_Units = {} | Price = {} ".format(order_time, base_units, quote_units, price))
-        print("{} | Trade Number = {} | Profit = {} | CumProfits = {} ".format(self.trades,order_time, real_profit, self.cum_profits))
-        print(100 * "-" + "\n")
+
+        self.Rep_Trade = pd.concat([self.Rep_Trade, df], ignore_index=True)
+
+        separator = "-" * 81
+        print("\n" * 2 + separator)
+        print(f"| {'Trade Report'.center(77)} |")
+        print(separator)
+        print(f"| Trade Number          : {self.N_trades:<53} |")
+        print(f"| Date                  : {order_time:<53} |")
+        print(f"| Action                : {going:<53} |")
+        print(f"| Base Units            : {base_units:<53} |")
+        print(f"| Quote Units           : {quote_units:<53} |")
+        print(f"| Price                 : {price:<53} |")
+        print(f"| Stop Loss Set         : {self.stop_loss_price:<53} |")
+        print(f"| Profit                : {real_profit:<53} |")
+        print(f"| Cumulative Profit     : {self.cum_profits:<53} |")
+        print(separator + "\n")        

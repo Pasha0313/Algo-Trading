@@ -70,12 +70,13 @@ def prepare_data_from_config(config):
 def prepare_trade_from_config(config):
     # Extract and convert values
     history_days = int(config.get("history_days", 10))  # Default to 120 hours if not set
-    trade_hours = int(config.get("trade_hours", 24))  # Default to 120 hours if not set
+    trade_hours = float(config.get("trade_hours", 24))  # Default to 120 hours if not set
     minimum_future_trade_value = float(config.get("minimum_future_trade_value", 100))
     trade_value = float(config.get("trade_value", 250.0))
-    n_trades = int(config.get("n_trades", 50))
+    TN_trades = int(config.get("TN_trades", 50))
     position = int(config.get("position", 0))
     stop_loss_pct = float(config.get("stop_loss_pct", 0.02))
+    Total_stop_loss = float(config.get("Total_stop_loss", 0.02))
 
     # Define time Period
     Today = datetime.utcnow()
@@ -88,9 +89,9 @@ def prepare_trade_from_config(config):
     trade_data = [
         ["Minimum Future Trade Value", f"{minimum_future_trade_value:.2f}"],
         ["Trade Value", f"{trade_value:.2f}"],
-        ["Number of Trades", n_trades],
+        ["Number of Trades", TN_trades],
         ["Position", position],
-        ["Stop Loss Percentage", f"{stop_loss_pct:.2f}"],
+        ["Stop Loss Percentage", f"{Total_stop_loss:.2f}"],
         ["Historical Period", f"{history_days}"],
         ["loading from Date", loading_from_date.strftime('%Y-%m-%d %H:%M')],
         ["Trade Start Date", Today.strftime('%Y-%m-%d %H:%M')],
@@ -100,7 +101,7 @@ def prepare_trade_from_config(config):
     # Print table
     print_data_table(trade_data)
 
-    return  loading_from_date,Today,stop_trade_date, minimum_future_trade_value, trade_value, n_trades, position, stop_loss_pct
+    return  loading_from_date,Today,stop_trade_date, minimum_future_trade_value, trade_value, TN_trades, position, stop_loss_pct,Total_stop_loss
 
 def load_api_keys(filename):
     try:

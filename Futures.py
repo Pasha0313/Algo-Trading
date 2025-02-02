@@ -9,6 +9,7 @@ from Forecast_Testing import ForecastTesting
 from Loading_Strategy import StrategyLoader
 from Loading_ForecastModel import LoadingForecastModel
 from Unsupervised_learning_trading_strategy import Unsupervised_learning_trading_strategy
+import pandas as pd
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -90,10 +91,10 @@ if __name__ == "__main__":
 ################################################################################################################   
     if Perform_Trading:
         # Prepare trade parameters
-        loading_from_date,Today,stop_trade_date, minimum_future_trade_value, trade_value, n_trades, position, stop_loss_pct = Loading_Config.prepare_trade_from_config(config)
+        loading_from_date,Today,stop_trade_date, minimum_future_trade_value, trade_value, TN_trades, position, stop_loss_pct ,Total_stop_loss = Loading_Config.prepare_trade_from_config(config)
         
         print("\nStart Trading")
-        #print(f"\nTrade will continue from: {Today}, until: {stop_trade_date}, Max number of trades is: {n_trades}")
+        #print(f"\nTrade will continue from: {Today}, until: {stop_trade_date}, Max number of trades is: {TN_trades}")
 
         current_price = new_func(symbol, client)
         units = round(trade_value / current_price,3)  
@@ -112,12 +113,26 @@ if __name__ == "__main__":
         else:
             trader = FuturesTrader(client=client, symbol=symbol, bar_length=bar_length,parameters=parameters,
                                    units=units, position=position, leverage=leverage,stop_trade_date=stop_trade_date, 
-                                    strategy=strategy,stop_loss_pct=stop_loss_pct, n_trades=n_trades)
+                                    strategy=strategy,Total_stop_loss=Total_stop_loss,stop_loss_pct=stop_loss_pct, TN_trades=TN_trades)
             
             trader.start_trading(historical_days=loading_from_date)
             
-            print(trader.prepared_data.tail(20))
-            print(trader.cum_profits)
+            if hasattr(trader, 'Rep_Trade') and isinstance(trader.Rep_Trade, pd.DataFrame) and not trader.Rep_Trade.empty:
+                print(trader.prepared_data.tail(trader.N_trades))
+                print('\n' * 2)
+                Report_Trades = trader.Rep_Trade.drop(['id', 'orderId', 'commissionAsset', 'positionSide', 'maker', 'buyer'], axis=1, errors='ignore')
+                Report_Trades['time'] = pd.to_datetime(Report_Trades['time'], unit='ms').dt.strftime('%Y-%m-%d %H:%M')
+                columns_order = ['time'] + [col for col in Report_Trades.columns if col != 'time']
+                Report_Trades = Report_Trades[columns_order]
+                print(Report_Trades)
+
+            separator = "-" * 70
+            print("\n" * 2 + separator)
+            print(f"| {'Final Trade Report'.center(66)} |")
+            print(separator)
+            print(f"| Trade Number          : {trader.N_trades:<42} |")
+            print(f"| Cumulative Profit     : {trader.cum_profits:<42} |")
+            print(separator + "\n")        
 
             # Uncomment to check account info
             # client.get_account()

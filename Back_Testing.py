@@ -219,6 +219,22 @@ class BackTesting(BackTestingBase):
             self.results = strategy.define_strategy_Bollinger_Stochastic_RSI(data, parameters)
         elif self.strategy == "Trend_Reversal_RSI":  # 100. **Trend Reversal with RSI**
             self.results = strategy.define_strategy_Trend_Reversal_RSI(data, parameters)
+        elif self.strategy == "Volume_Profile":  # 101. **Volume Profile Strategy**
+            self.results = strategy.define_strategy_Volume_Profile(data, parameters)  
+        elif self.strategy == "Grid_Trading":  # 102. **Grid Trading Strategy**
+            self.results = strategy.define_strategy_Grid_Trading(data, parameters)                                          
+        elif self.strategy == "EMA_MACD_ADX":  # 103. **EMA + MACD + ADX Hybrid Strategy**
+            self.results = strategy.define_strategy_EMA_MACD_ADX(data, parameters)                                          
+        elif self.strategy == "Trend_Momentum_Volatility":  # 104. **EMA + MACD + ADX + ATR Stochastic + RSI Hybrid Strategy**
+            self.results = strategy.define_strategy_Trend_Momentum_Volatility(data, parameters)   
+        elif self.strategy == "Stochastic_RSI_Bollinger_VWAP":  # 105. ** Stochastic RSI Bollinger VWAP Hybrid Strategy**
+            self.results = strategy.define_strategy_Stochastic_RSI_Bollinger_VWAP(data, parameters)       
+        elif self.strategy == "Stochastic_RSI_FULL":  #106. ** Stochastic RSI Strategy with %K and %D smoothing **
+            self.results = strategy.define_strategy_Stochastic_RSI_FULL(data, parameters)  
+        elif self.strategy == "Gaussian_Channel_FULL":  #107. **  Gaussian Channel strategy **
+            self.results = strategy.define_strategy_Gaussian_Channel_FULL(data, parameters) 
+        elif self.strategy == "Combined_Gaussian_Stochastic_RSI_FULL":  #108. ** combined the Gaussian Channel and Stochastic RSI strategies **
+            self.results = strategy.define_strategy_Combined_Gaussian_Stochastic_RSI_FULL(data, parameters) 
 
     def optimize_strategy(self, param_ranges, metric="Multiple", output_file=None):
         print("\nOptimize Strategy is running.")
@@ -250,6 +266,7 @@ class BackTesting(BackTestingBase):
         self.results_overview = pd.DataFrame(data=valid_combinations, columns=list(param_ranges.keys()))
         self.results_overview["performance"] = performance
         print(f"Performance values:\n{self.results_overview}")
+        self.results_overview.to_csv(os.path.join(Optimize_folder,'ALL_'+output_file), index=False)
         best_params = self.find_best_strategy(output_file)
         return best_params
 
