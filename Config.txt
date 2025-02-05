@@ -2,7 +2,7 @@
 ############      Main       ###########
 ########################################
 symbol=BTCUSDT
-bar_length=15m
+bar_length=4h
 leverage=2
 strategy=VWAP
 tc=-0.00085
