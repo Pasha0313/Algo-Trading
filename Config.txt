@@ -2,7 +2,7 @@
 ############      Main       ###########
 ########################################
 symbol=BTCUSDT
-bar_length=15m
+bar_length=1h
 leverage=1
 strategy=ADX_ATR_Bollinger_Stochastic_RSI
 tc=-0.001
