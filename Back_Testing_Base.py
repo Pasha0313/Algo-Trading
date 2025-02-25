@@ -219,3 +219,81 @@ class BackTestingBase:
             plt.xlabel("Return cat")
             plt.ylabel("Volume cat")
             plt.show()    
+
+    def plot_all_indicators(self, plot_name=None):
+        if self.results is None:
+            logger.warning("Run test_strategy() first.")
+            return
+
+        data = self.results.copy()
+
+        title = f"{self.strategy} | {self.symbol} | TC = {self.tc}"
+        
+        available_columns = data.columns
+        print(f"Available columns in results: {available_columns}")
+
+        if "Stoch_RSI" in available_columns:
+            data["Stoch_RSI_n"] = data["Stoch_RSI"] * 100  
+            data.drop(columns=["Stoch_RSI"], inplace=True) 
+            available_columns = data.columns 
+
+        if "std_dev" in available_columns:
+            data["std_dev_n"] = data["std_dev"] / data["SMA"]
+            data.drop(columns=["std_dev"], inplace=True) 
+            available_columns = data.columns              
+
+        price_indicators = ["Close", "SMA", "Upper_Band", "Lower_Band"]
+        momentum_indicators = ["ADX", "RSI", "Stoch_RSI_n"]  
+        volatility_indicators = ["ATR", "BB_Width", "std_dev_n"]
+
+        price_columns = [col for col in price_indicators if col in available_columns]
+        momentum_columns = [col for col in momentum_indicators if col in available_columns]
+        volatility_columns = [col for col in volatility_indicators if col in available_columns]
+        
+        position_available = "position" in available_columns
+
+
+        num_plots = 3 + int(position_available)  
+        fig, axes = plt.subplots(num_plots, 1, figsize=(10, 8), sharex=True)
+
+        plot_index = 0  
+        
+        # **Plot 1: Price-Related Indicators**
+        if price_columns:
+            for col in price_columns:
+                axes[plot_index].plot(data.index, data[col], label=col)
+            axes[plot_index].set_title("Price Indicators")
+            axes[plot_index].legend()
+            plot_index += 1
+
+        # **Plot 2: Momentum Indicators (ADX, RSI, Stoch_RSI_n)**
+        if momentum_columns:
+            for col in momentum_columns:
+                axes[plot_index].plot(data.index, data[col], label=col)
+            axes[plot_index].set_title("Momentum Indicators")
+            axes[plot_index].legend()
+            plot_index += 1
+
+        # **Plot 3: Volatility Indicators (ATR, BB Width, std_dev)**
+        if volatility_columns:
+            for col in volatility_columns:
+                axes[plot_index].plot(data.index, data[col], label=col)
+            axes[plot_index].set_title("Volatility Indicators")
+            axes[plot_index].legend()
+            plot_index += 1
+
+        # **Plot 4: Trading Positions (+1 Buy, -1 Sell)**
+        if position_available:
+            axes[plot_index].plot(data.index, data["position"], label="Position", linestyle="dotted", color="black")
+            axes[plot_index].set_title("Trading Positions")
+            axes[plot_index].axhline(1, linestyle="--", color="green", alpha=0.5, label="Buy Signal (+1)")
+            axes[plot_index].axhline(-1, linestyle="--", color="red", alpha=0.5, label="Sell Signal (-1)")
+            axes[plot_index].legend()
+            plot_index += 1
+
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        plot_path = os.path.join(Plot_folder, f'Indicators_{plot_name}.png') if plot_name else f'Indicators_plot.png'
+        plt.savefig(plot_path)
+        plt.show()

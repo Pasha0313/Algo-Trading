@@ -28,10 +28,12 @@ if __name__ == "__main__":
     strategy_loader = StrategyLoader(os.path.join(Path_Configs,"strategies_config.json"))
 
     # Get control settings
-    Unsupervised_Learning, Perform_Testing, Print_Data, Perform_Forecasting, Perform_Tuner, Perform_Trading = Loading_Config.get_control_settings(config)
+    Unsupervised_Learning, Perform_Testing, Print_Data, Perform_Forecasting, Perform_Tuner, Perform_Trading\
+    = Loading_Config.get_control_settings(config)
 
     # Prepare data and get individual values
-    start_date, end_date, symbol, bar_length, leverage, strategy, tc, test_days,metric , ForecastModelName , future_forecast_steps = Loading_Config.prepare_data_from_config(config)
+    start_date, end_date, symbol, bar_length, leverage, strategy, tc, test_days,metric , ForecastModelName ,\
+    future_forecast_steps = Loading_Config.prepare_data_from_config(config)
 
     # Load API keys from file
     try:
@@ -65,12 +67,14 @@ if __name__ == "__main__":
         backtesting.test_strategy(parameters_BT)
         backtesting.add_leverage(leverage=leverage)
         backtesting.plot_strategy_comparison(leverage=True,plot_name=f"{symbol}_{strategy}")
+        backtesting.plot_all_indicators(plot_name=f"{symbol}_{strategy}")
         print(backtesting.results.trades.value_counts())
         parameters_BT  = backtesting.optimize_strategy(param_ranges_BT,metric,output_file=f"{strategy}_optimize_results.csv")
         if not parameters_BT == None :      
             backtesting.test_strategy(parameters_BT)
             backtesting.add_leverage(leverage=leverage)
             backtesting.plot_strategy_comparison(leverage=True,plot_name=f"WOpt_{symbol}_{strategy}")
+            backtesting.plot_all_indicators(plot_name=f"{symbol}_{strategy}")
         else :
             print("Parameters (BT) is : None")
 ################################################################################################################   
@@ -91,7 +95,9 @@ if __name__ == "__main__":
 ################################################################################################################   
     if Perform_Trading:
         # Prepare trade parameters
-        loading_from_date,Today,stop_trade_date, minimum_future_trade_value, trade_value, TN_trades, position, stop_loss_pct ,Total_stop_loss = Loading_Config.prepare_trade_from_config(config)
+        loading_from_date,Today,stop_trade_date, minimum_future_trade_value, trade_value, TN_trades, position,\
+        stop_loss_pct ,Total_stop_loss, Total_Take_Profit ,Position_Long,Position_Neutral,Position_Short= \
+        Loading_Config.prepare_trade_from_config(config)
         
         print("\nStart Trading")
         #print(f"\nTrade will continue from: {Today}, until: {stop_trade_date}, Max number of trades is: {TN_trades}")
@@ -113,7 +119,9 @@ if __name__ == "__main__":
         else:
             trader = FuturesTrader(client=client, symbol=symbol, bar_length=bar_length,parameters=parameters,
                                    units=units, position=position, leverage=leverage,stop_trade_date=stop_trade_date, 
-                                    strategy=strategy,Total_stop_loss=Total_stop_loss,stop_loss_pct=stop_loss_pct, TN_trades=TN_trades)
+                                   strategy=strategy,Total_stop_loss=Total_stop_loss,stop_loss_pct=stop_loss_pct,
+                                   Position_Long=Position_Long,Position_Neutral=Position_Neutral,Position_Short=Position_Short,
+                                   Total_Take_Profit=Total_Take_Profit, TN_trades=TN_trades)
             
             trader.start_trading(historical_days=loading_from_date)
             

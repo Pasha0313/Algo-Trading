@@ -4,6 +4,7 @@ from itertools import product
 import numpy as np
 import pandas as pd
 import os
+from concurrent.futures import ProcessPoolExecutor
 
 Optimize_folder = "Optimize"
 os.makedirs(Optimize_folder, exist_ok=True)
@@ -235,6 +236,54 @@ class BackTesting(BackTestingBase):
             self.results = strategy.define_strategy_Gaussian_Channel_FULL(data, parameters) 
         elif self.strategy == "Combined_Gaussian_Stochastic_RSI_FULL":  #108. ** combined the Gaussian Channel and Stochastic RSI strategies **
             self.results = strategy.define_strategy_Combined_Gaussian_Stochastic_RSI_FULL(data, parameters) 
+        elif self.strategy == "OBV": # 109. **On-Balance Volume (OBV) **
+            self.results = strategy.define_strategy_OBV(data)
+        elif self.strategy == "Volume_delta": # 110. ** Volum Delta **
+            self.results = strategy.define_strategy_volume_delta(data)
+        elif self.strategy == "Ease_of_Movement": # 111. ** Ease of Movement **
+            self.results = strategy.define_strategy_ease_of_movement(data, parameters)
+        elif self.strategy == "WMA": # 112. ** Weight Moving Average **
+            self.results = strategy.define_strategy_wma(data,parameters)
+        elif self.strategy == "EMA": # 113. ** Exponential Moving Average **
+            self.results = strategy.define_strategy_ema(data,parameters)
+        elif self.strategy == "DEMA": # 114. ** Double Exponential Moving Average **
+            self.results = strategy.define_strategy_dema(data, parameters)
+        elif self.strategy == "AMA": # 115. ** Adaptive Moving Average **
+            self.results = strategy.define_strategy_ama(data, parameters)
+        elif self.strategy == "VIDYA": # 116. ** Variable Index Dynamic Average (VIDYA) **
+            self.results = strategy.define_strategy_vidya(data, parameters)
+        elif self.strategy == "SMA_cross":  # 117. ** Simple Moving Average Cross **
+            self.results = strategy.define_strategy_SMA_cross(data, parameters)
+        elif self.strategy == "Stochastic": # 118. **Stochastic Oscillator Strategy**
+           self.results = strategy.define_strategy_Stochastic(data, parameters)
+        elif self.strategy == "AO": # 119. **Awesome Oscillator (AO) Strategy**
+            self.results = strategy.define_strategy_AO(data, parameters)
+        elif self.strategy == "KST": # 120. **Know Sure Thing (KST) Strategy**
+            self.results = strategy.define_strategy_KST(data, parameters)
+        elif self.strategy == "Bollinger_SMA": # 121. **Bollinger Bands with SMA Strategy**
+            self.results = strategy.define_strategy_Bollinger(data, parameters)
+        elif self.strategy == "Bollinger_Keltner_Squeeze": # 122. **Bollinger Bands & Keltner Channel Squeeze Strategy**
+           self.results = strategy.define_strategy_Squeeze(data, parameters)
+        elif self.strategy == "StdDev_Channel": # 123. **Standard Deviation Channel Strategy**
+            self.results = strategy.define_strategy_StdDev_Channel(data, parameters)
+        elif self.strategy == "HV": # 124. **Historical Volatility (HV) Strategy**
+            self.results = strategy.define_strategy_HV(data, parameters)
+        elif self.strategy == "VR": # 125. ** Volatility Ratio (VR) Strategy **
+            self.results = strategy.define_strategy_VR(data, parameters)
+        elif self.strategy == "Simple_Pivot_Points": # 126. ** Simple_Pivot_Points Strategy **
+            self.results = strategy.define_strategy_Simple_Pivot_Points(data)
+        elif self.strategy == "DI": # 127. ** Directional Indicator (DI-Only) Strategy **
+            self.results = strategy.define_strategy_DI(data, parameters)
+        elif self.strategy == "Stochastic_RSI_StdDev_Channel": # 128. ** Stochastic RSI with Standard Deviation Channel Strategy **
+            self.results = strategy.define_strategy_Stochastic_RSI_StdDev_Channel(data, parameters)    
+        elif self.strategy == "Bollinger_Stochastic_RSI_Modified": #129. **Bollinger Bands with Stochastic RSI modified**
+            self.results = strategy.define_strategy_Bollinger_Stochastic_RSI_modified(data, parameters)  
+        elif self.strategy == "Keltner_Stochastic_RSI": #130. **Keltner Channel Calculation Bands with Stochastic RSI**
+            self.results = strategy.define_strategy_Keltner_Stochastic_RSI(data, parameters)      
+        elif self.strategy == "HMA_Stochastic_RSI": # 131. **Hull Moving Average Channel with Stochastic RSI**
+            self.results = strategy.define_strategy_HMA_StochRSI(data, parameters)    
+        elif self.strategy == "ADX_ATR_Bollinger_Stochastic_RSI":  # 132. **ADX ATR Bollinger Bands with Stochastic RSI**
+            self.results = strategy.define_strategy_ADX_ATR_Bollinger_Stochastic_RSI(data, parameters)    
 
     def optimize_strategy(self, param_ranges, metric="Multiple", output_file=None):
         print("\nOptimize Strategy is running.")
@@ -269,7 +318,7 @@ class BackTesting(BackTestingBase):
         self.results_overview.to_csv(os.path.join(Optimize_folder,'ALL_'+output_file), index=False)
         best_params = self.find_best_strategy(output_file)
         return best_params
-
+    
     def _generate_param_combinations(self, param_ranges):
         ranges = [param_ranges[param] for param in param_ranges]
         return list(product(*ranges))

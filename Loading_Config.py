@@ -76,7 +76,11 @@ def prepare_trade_from_config(config):
     TN_trades = int(config.get("TN_trades", 50))
     position = int(config.get("position", 0))
     stop_loss_pct = float(config.get("stop_loss_pct", 0.02))
-    Total_stop_loss = float(config.get("Total_stop_loss", 0.02))
+    Total_stop_loss = float(config.get("Total_stop_loss", 200))
+    Total_Take_Profit = float(config.get("Total_Take_Profit", 200))
+    Position_Long = config.get("Position_Long", "True").lower() == "true"
+    Position_Neutral = config.get("Position_Neutral", "True").lower() == "true"
+    Position_Short = config.get("Position_Short", "True").lower() == "true"
 
     # Define time Period
     Today = datetime.utcnow()
@@ -91,17 +95,23 @@ def prepare_trade_from_config(config):
         ["Trade Value", f"{trade_value:.2f}"],
         ["Number of Trades", TN_trades],
         ["Position", position],
-        ["Stop Loss Percentage", f"{Total_stop_loss:.2f}"],
+        ["Stop Loss Percentage", f"{stop_loss_pct:.2f}"],
+        ["Totla Stop Loss", f"{Total_stop_loss:.2f}"],
+        ["Totla PNL", f"{Total_Take_Profit:.2f}"],
         ["Historical Period", f"{history_days}"],
         ["loading from Date", loading_from_date.strftime('%Y-%m-%d %H:%M')],
         ["Trade Start Date", Today.strftime('%Y-%m-%d %H:%M')],
-        ["Trade Stop Date", stop_trade_date.strftime('%Y-%m-%d %H:%M')]        
+        ["Trade Stop Date", stop_trade_date.strftime('%Y-%m-%d %H:%M')],
+        ["Position_Long", Position_Long],
+        ["Position_Neutral", Position_Neutral],
+        ["Position_Short", Position_Short],
     ]
 
     # Print table
     print_data_table(trade_data)
 
-    return  loading_from_date,Today,stop_trade_date, minimum_future_trade_value, trade_value, TN_trades, position, stop_loss_pct,Total_stop_loss
+    return  loading_from_date,Today,stop_trade_date, minimum_future_trade_value, trade_value, TN_trades,\
+            position, stop_loss_pct,Total_stop_loss,Total_Take_Profit,Position_Long,Position_Neutral,Position_Short
 
 def load_api_keys(filename):
     try:
