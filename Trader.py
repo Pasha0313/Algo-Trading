@@ -315,7 +315,7 @@ class FuturesTrader:
                 elif self.strategy == "OBV_RSI":  # 82. **On-Balance Volume (OBV) with RSI**
                     self.prepared_data = strategy.define_strategy_OBV_RSI(data, self.parameters)
                 elif self.strategy == "SuperTrend_RSI":  # 83. **SuperTrend with RSI**
-                    self.prepared_data = strategy.define_strategy_SuperTrend_RSI(data, self.parameters)
+                    self.prepared_data = strategy.define_strategy_ATR_RSI(data, self.parameters)
                 elif self.strategy == "EMA_Bollinger":  # 84. **Exponential Moving Average with Bollinger Bands**
                     self.prepared_data = strategy.define_strategy_EMA_Bollinger(data, self.parameters)
                 elif self.strategy == "RSI_MA_Ribbon":  # 85. **RSI and Moving Average Ribbon**
@@ -413,7 +413,9 @@ class FuturesTrader:
                 elif self.strategy == "HMA_Stochastic_RSI": # 131. **Hull Moving Average Channel with Stochastic RSI**
                     self.prepared_data = strategy.define_strategy_HMA_StochRSI(data, self.parameters)   
                 elif self.strategy == "ADX_ATR_Bollinger_Stochastic_RSI":  # 132. **ADX ATR Bollinger Bands with Stochastic RSI**
-                    self.prepared_data = strategy.define_strategy_ADX_ATR_Bollinger_Stochastic_RSI(data, self.parameters)                                                                                     
+                    self.prepared_data = strategy.define_strategy_ADX_ATR_Bollinger_Stochastic_RSI(data, self.parameters)   
+                elif self.strategy == "Supertrend_Stochastic_RSI":  # 133. **SuperTrend with Stochastic RSI**
+                    self.prepared_data = strategy.define_strategy_Supertrend_Stochastic_RSI(data, self.parameters)                                                                                     
                 self.execute_trades() 
                 #self.execute_trades_PNL()                                                                                           
    

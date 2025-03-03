@@ -185,7 +185,7 @@ class BackTesting(BackTestingBase):
         elif self.strategy == "OBV_RSI":  # 82. **On-Balance Volume (OBV) with RSI**
             self.results = strategy.define_strategy_OBV_RSI(data, parameters)
         elif self.strategy == "SuperTrend_RSI":  # 83. **SuperTrend with RSI**
-            self.results = strategy.define_strategy_SuperTrend_RSI(data, parameters)
+            self.results = strategy.define_strategy_ATR_RSI(data, parameters)
         elif self.strategy == "EMA_Bollinger":  # 84. **Exponential Moving Average with Bollinger Bands**
             self.results = strategy.define_strategy_EMA_Bollinger(data, parameters)
         elif self.strategy == "RSI_MA_Ribbon":  # 85. **RSI and Moving Average Ribbon**
@@ -284,6 +284,9 @@ class BackTesting(BackTestingBase):
             self.results = strategy.define_strategy_HMA_StochRSI(data, parameters)    
         elif self.strategy == "ADX_ATR_Bollinger_Stochastic_RSI":  # 132. **ADX ATR Bollinger Bands with Stochastic RSI**
             self.results = strategy.define_strategy_ADX_ATR_Bollinger_Stochastic_RSI(data, parameters)    
+        elif self.strategy == "Supertrend_Stochastic_RSI":  # 133. **SuperTrend with Stochastic RSI**
+            self.results = strategy.define_strategy_Supertrend_Stochastic_RSI(data, parameters)                                                                                     
+
 
     def optimize_strategy(self, param_ranges, metric="Multiple", output_file=None):
         print("\nOptimize Strategy is running.")
