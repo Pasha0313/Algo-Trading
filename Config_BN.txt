@@ -1,0 +1,50 @@
+########################################
+############      Main       ###########
+########################################
+symbol=BTCUSDT
+bar_length=1h
+leverage=2
+strategy=PV
+tc=-0.001
+test_days=100
+metric=Sharpe
+
+########################################
+#############      AI       ############
+########################################
+ForecastModelName=LSTM
+FutureForecastSteps=10
+
+########################################
+############     Control     ###########
+########################################
+Unsupervised_Learning=False
+Perform_Testing=True
+Print_Data=False
+Perform_Forecasting=False
+Perform_Tuner=False
+Perform_Trading=False
+
+########################################
+############   Trading Config  #########
+########################################
+history_days=3
+trade_hours=24
+minimum_future_trade_value=100
+trade_value=1000.0
+TN_trades=100
+position=0
+stop_loss_pct = 0.0025
+Total_stop_loss=50
+Total_Take_Profit = 100
+Position_Long = True
+Position_Neutral = False
+Position_Short = True
+
+
+########################################
+## Recommendation
+## For Real-Time Trading:
+## Load 1-2 weeks of data for the 15-minute timeframe or 1-3 days of data for the 5-minute timeframe.
+## For Backtesting:
+## Load 3-6 months of data for the 15-minute timeframe or 1-3 months of data for the 5-minute timeframe.
