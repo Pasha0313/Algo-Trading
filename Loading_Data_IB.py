@@ -3,7 +3,7 @@ import numpy as np
 import time
 import re
 import pytz
-from ib_insync import IB, util, Forex, Stock, Future
+from ib_insync import util
 
 def normalize_bar_length_for_timedelta(bar_length):
     bar_length = bar_length.strip().lower()

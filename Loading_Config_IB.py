@@ -1,42 +1,57 @@
 from datetime import datetime, timedelta
 from tabulate import tabulate
-from ib_insync import Forex, Stock, Future, Contract
+from ib_insync import *
 
-def get_ib_contract(symbol, asset_type="forex", secType='CASH', expiry=None, exchange=None, currency="USD"):
+def get_ib_contract(client, symbol, asset_type="forex", secType='CASH', expiry=None, exchange=None, currency="USD"):
+
     symbol = symbol.strip().upper()
     asset_type = asset_type.lower()
-    exchange = exchange or ("IDEALPRO" if asset_type == "forex" else "SMART")
 
-    print(f"[INFO] Creating IB contract for symbol: {symbol}, type: {asset_type}, exchange: {exchange}")
-
-    if asset_type == "forex":
-        # Metals and synthetics like XAUUSD, XAGUSD
-        if symbol in ["XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD"]:
-            # First try as CFD (more reliable for metals in IBKR)
-            return Contract(symbol=symbol, secType="CFD", exchange=exchange, currency=currency)
-
-        elif len(symbol) == 6 and symbol.isalpha():
-            # Standard Forex pair: e.g. EURUSD
-            base = symbol[:3]
-            quote = symbol[3:]
-            return Contract(symbol=base, secType="CASH", exchange=exchange, currency=quote)
-
+    # === Default Exchange Routing ===
+    if exchange is None:
+        if asset_type == "forex":
+            exchange = "IDEALPRO"
+        elif asset_type == "cfd":
+            if symbol in ["DEIDXEUR", "DE40", "UK100", "NAS100", "SPX500", "US30"]:
+                exchange = "SMART"  # Index CFDs route via SMART
+            else:
+                exchange = "SMART"
+        elif asset_type == "crypto":
+            exchange = "PAXOS"
         else:
-            # Custom format: symbol="XAU", currency="USD"
-            return Contract(symbol=symbol, secType="CASH", exchange=exchange, currency=currency)
+            exchange = "SMART"
+
+    print(f"[INFO] Creating IB contract for symbol: {symbol}, type: {asset_type}, exchange: {exchange}, currency {currency}")
+
+    # === Contract Type Routing ===
+    if asset_type == "forex":
+        assert len(symbol) == 6, "❌ Forex symbol must be like 'EURUSD'"
+        contract = Forex(symbol)
 
     elif asset_type == "stock":
-        return Stock(symbol, exchange, currency)
+        contract = Stock(symbol, exchange, currency)
 
     elif asset_type == "future":
         assert expiry, "❌ Future contracts require expiry."
-        return Future(symbol, expiry, exchange, currency)
+        contract = Future(symbol, expiry, exchange, currency)
 
     elif asset_type == "crypto":
-        return Contract(symbol=symbol, secType="CRYPTO", exchange=exchange or "PAXOS", currency=currency)
+        contract = Contract(symbol=symbol, secType="CRYPTO", exchange=exchange, currency=currency)
+
+    elif asset_type == "cfd":
+        contract = Contract(symbol=symbol, secType="CFD", exchange=exchange, currency=currency)
 
     else:
         raise ValueError(f"❌ Unsupported asset type: {asset_type}")
+
+    # === Contract Validation ===
+    details = client.reqContractDetails(contract)
+    if not details:
+        raise ValueError(f"❌ No contract found for {symbol} ({asset_type}) with exchange {exchange}")
+    
+    print(f"\n[✅] Valid contract found: {details[0].contract}\n")
+    
+    return contract
 
 def load_config_from_text(filename):
     config = {}
@@ -65,7 +80,7 @@ def print_config_values(symbol, bar_length, leverage, strategy, tc, test_days):
     print(f"Trading Costs: {tc:.5f}")
     print(f"Days: {test_days}")
 
-def prepare_data_from_config(config,ib):
+def prepare_data_from_config(config,client):
     # Raw config values
     symbol = config.get("symbol", "BTC")
     asset_type = config.get("asset_type", "Future")
@@ -96,8 +111,8 @@ def prepare_data_from_config(config,ib):
 
     # Build contract
     try:
-        contract = get_ib_contract(symbol, asset_type, secType, expiry, exchange, currency)
-        ib.qualifyContracts(contract)
+        contract = get_ib_contract(client, symbol, asset_type, secType, expiry, exchange, currency)
+        client.qualifyContracts(contract)
     except Exception as e:
         print(f"\n❌ Error building or qualifying contract for symbol '{symbol}': {e}")
         raise
@@ -124,7 +139,7 @@ def prepare_data_from_config(config,ib):
         ["Forecast Model Name", ForecastModelName]
     ]
     print_data_table(input_data)
-    return start_date, end_date, asset_type ,symbol, contract, timezone ,bar_length, leverage, strategy, tc, metric, \
+    return start_date, end_date, contract, timezone ,bar_length, leverage, strategy, tc, metric, \
            ForecastModelName, future_forecast_steps, duration, what_to_show, use_rth
 
 def prepare_trade_from_config(config):

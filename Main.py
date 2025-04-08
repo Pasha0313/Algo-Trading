@@ -15,7 +15,8 @@ from Loading_Strategy import StrategyLoader
 from Loading_ForecastModel import LoadingForecastModel
 from Unsupervised_learning_trading_strategy import Unsupervised_learning_trading_strategy
 
-from ib_insync import IB, Forex, Stock, Future, Contract
+from ib_insync import *
+#from ib_insync import IB, Forex, Stock, Future, Contract
 from binance import Client
 
 import warnings
@@ -34,51 +35,12 @@ os.makedirs(Path_Configs, exist_ok=True)
 def get_BN_price(symbol, client):
     return float(client.futures_symbol_ticker(symbol=symbol)['price'])
 
+def get_ibkr_price(client, contract, Print_Data: bool = True):
+    client.reqMarketDataType(4)  
 
-from ib_insync import IB, Forex, Stock, Future, Contract
-import numpy as np
+    symbol = contract.symbol
+    asset_type = contract.asset_type.lower()
 
-def get_ibkr_price(client: IB, symbol: str, asset_type: str, currency: str = 'USD',
-                   expiry: str = None, exchange: str = None, Print_Data: bool = False):
-    client.reqMarketDataType(4)  # 4 = delayed; use 1 for real-time if subscribed
-
-    asset_type = asset_type.lower()
-    symbol = symbol.upper()
-    exchange = exchange or "SMART"  # Use SMART routing unless needed
-
-    contract = None
-
-    if asset_type == "forex":
-        # Handle special metals or synthetic pairs like XAUUSD
-        if symbol in ["XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD"]:
-            # Try CFD first (more reliable with IBKR for metals)
-            contract = Contract(symbol=symbol, secType="CFD", exchange=exchange, currency=currency)
-            if not client.reqContractDetails(contract):  # Fallback to CASH if CFD fails
-                contract = Contract(symbol=symbol[:3], secType="CASH", exchange="IDEALPRO", currency=symbol[3:])
-        else:
-            # Handle regular forex like EURUSD
-            assert len(symbol) == 6, "Forex symbol must be like 'EURUSD'"
-            contract = Forex(symbol)
-
-    elif asset_type == "stock":
-        contract = Stock(symbol, exchange, currency)
-
-    elif asset_type == "future":
-        assert expiry and exchange, "Future contracts require expiry and exchange"
-        contract = Future(symbol, expiry, exchange, currency)
-
-    elif asset_type == "crypto":
-        exchange = exchange or "PAXOS"
-        contract = Contract(symbol=symbol, secType="CRYPTO", exchange=exchange, currency=currency)
-
-    else:
-        raise ValueError(f"Unsupported asset type: {asset_type}")
-
-    # Validate the contract first
-    if not client.reqContractDetails(contract):
-        raise ValueError(f"❌ No contract found for {symbol} ({asset_type}) with exchange {exchange}")
-
-    # Request market data
     market_data = client.reqMktData(contract, '', False, False)
 
     for _ in range(10):
@@ -91,7 +53,8 @@ def get_ibkr_price(client: IB, symbol: str, asset_type: str, currency: str = 'US
     price = next((p for p in price_candidates if p is not None and not np.isnan(p)), None)
 
     if Print_Data:
-        print(f"[DEBUG] Price fields - last: {market_data.last}, close: {market_data.close}, "
+        print(f"[DEBUG] Price fields for {symbol} ({asset_type}) - "
+              f"last: {market_data.last}, close: {market_data.close}, "
               f"bid: {market_data.bid}, ask: {market_data.ask}")
 
     if price is None:
@@ -136,9 +99,19 @@ if __name__ == "__main__":
         client = IB()
         client.connect('127.0.0.1', 7497, clientId=1)  # default TWS paper trading port
         print("Successfully connected to IBKR!\n")
+
+        # Get account summary and convert to DataFrame
+        account_summary = client.accountSummary()
+        df_summary = util.df(account_summary)
+
+        # Access Net Liquidation value
+        net_liq = df_summary[df_summary['tag'] == 'NetLiquidation']['value'].values[0]
+        #print(f"Net Liquidation Value (Equity): {net_liq}")
+        print('The Net Liquidation value ')
+        print(df_summary[['tag', 'value']])
         
         # Prepare data and get individual values
-        start_date, end_date, asset_type ,symbol ,contract, timezone,bar_length, leverage, strategy, tc, metric, \
+        start_date, end_date, contract, timezone,bar_length, leverage, strategy, tc, metric, \
         ForecastModelName, future_forecast_steps, duration, what_to_show, use_rth = Loading_Config_IB.prepare_data_from_config(config,client)
 
 ################################################################################################################  
@@ -166,15 +139,15 @@ if __name__ == "__main__":
             
         backtesting.test_strategy(parameters_BT)
         backtesting.add_leverage(leverage=leverage)
-        backtesting.plot_strategy_comparison(leverage=True,plot_name=f"{symbol}_{strategy}")
-        backtesting.plot_all_indicators(plot_name=f"{symbol}_{strategy}")
+        backtesting.plot_strategy_comparison(leverage=True,plot_name=f"{contract.symbol}_{strategy}")
+        backtesting.plot_all_indicators(plot_name=f"{contract.symbol}_{strategy}")
         print(backtesting.results.trades.value_counts())
         parameters_BT  = backtesting.optimize_strategy(param_ranges_BT,metric,output_file=f"{strategy}_optimize_results.csv")
         if not parameters_BT == None :      
             backtesting.test_strategy(parameters_BT)
             backtesting.add_leverage(leverage=leverage)
-            backtesting.plot_strategy_comparison(leverage=True,plot_name=f"WOpt_{symbol}_{strategy}")
-            backtesting.plot_all_indicators(plot_name=f"{symbol}_{strategy}")
+            backtesting.plot_strategy_comparison(leverage=True,plot_name=f"WOpt_{contract.symbol}_{strategy}")
+            backtesting.plot_all_indicators(plot_name=f"{contract.symbol}_{strategy}")
         else :
             print("Parameters (BT) is : None")
 ################################################################################################################   
@@ -185,7 +158,7 @@ if __name__ == "__main__":
         description, parameters_F, param_ranges_F = model_loader.process_model(ForecastModelName)
 
         model_loader.print_model_details(ForecastModelName)
-
+        if Broker == "Interactive Broker": symbol = contract.symbol
         forecast_testing = ForecastTesting(client=client, symbol=symbol, bar_length=bar_length,
                                 start=start_date, end=end_date, tc=tc,leverage=leverage, strategy=strategy
                                 ,future_forecast_steps=future_forecast_steps)
@@ -206,7 +179,7 @@ if __name__ == "__main__":
             loading_from_date,Today,stop_trade_date, minimum_future_trade_value, trade_value, TN_trades, position,\
             stop_loss_pct ,Total_stop_loss, Total_Take_Profit ,Position_Long,Position_Neutral,Position_Short= \
             Loading_Config_IB.prepare_trade_from_config(config)
-            current_price = get_ibkr_price(client, symbol, asset_type)
+            current_price = get_ibkr_price(client, contract)
         
         print("\nStart Trading")
         #print(f"\nTrade will continue from: {Today}, until: {stop_trade_date}, Max number of trades is: {TN_trades}")
