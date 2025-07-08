@@ -285,6 +285,8 @@ class BackTesting_IB(BackTestingBase_IB):
             self.results = strategy.define_strategy_ADX_ATR_Bollinger_Stochastic_RSI(data, parameters)    
         elif self.strategy == "Supertrend_Stochastic_RSI":  # 133. **SuperTrend with Stochastic RSI**
             self.results = strategy.define_strategy_Supertrend_Stochastic_RSI(data, parameters)                                                                                     
+        elif self.strategy == "Trend_Momentum_RSI_Volatility":  # 134. ** EMA + MACD + ADX + RSI + ATR hybrid strategy **
+            self.results = strategy.define_strategy_Trend_Momentum_RSI_Volatility(data, parameters)                
 
 
     def optimize_strategy(self, param_ranges, metric="Multiple", output_file=None):

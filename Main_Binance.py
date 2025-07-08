@@ -2,6 +2,7 @@ import Loading_Config_BN as Loading_Config_BN
 import Loading_Config_IB as Loading_Config_IB
 import pandas as pd
 import os
+import Strategy_Optimizer
 
 from Config_Check import make_request_with_retries,Debug_function
 from tkinter import TRUE
@@ -11,6 +12,7 @@ from Forecast_Testing import ForecastTesting
 from Loading_Strategy import StrategyLoader
 from Loading_ForecastModel import LoadingForecastModel
 from Unsupervised_learning_trading_strategy import Unsupervised_learning_trading_strategy
+
 
 from ib_insync import *
 #from ib_insync import IB, Forex, Stock, Future, Contract
@@ -31,7 +33,7 @@ os.makedirs(Path_Configs, exist_ok=True)
 def get_BN_price(symbol, client):
     return float(client.futures_symbol_ticker(symbol=symbol)['price'])
 
-def run_binance():
+def run_binance(Mode):
     config = Loading_Config_BN.load_config_from_text(os.path.join(Path_Configs, "Config_BN.txt"))
     strategy_loader = StrategyLoader(os.path.join(Path_Configs,"strategies_config.json"))
 
@@ -53,6 +55,11 @@ def run_binance():
     print(f"\nAttempt : Trying to connect to Binance...")
     client = Client(api_key=api_key, api_secret=secret_key, tld="com", testnet=True)
     print("Successfully connected to Binance!\n")
+
+################################################################################################################  
+    if Mode == "optimize":
+        Strategy_Optimizer.run_optimizer(client=client,start_date=start_date, end_date=end_date,symbol=symbol,tc=tc, \
+                                         leverage=leverage,metric=metric)
 
 ################################################################################################################  
     if Unsupervised_Learning:

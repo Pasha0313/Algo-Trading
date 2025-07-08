@@ -5,8 +5,8 @@ import pandas as pd
 import time
 
 class FuturesTrader_BN:
-    
-    def __init__(self, client, symbol, bar_length, units, stop_trade_date, Total_stop_loss,stop_loss_pct,Total_Take_Profit,parameters,
+   
+    def __init__(self, client, symbol, bar_length,parameters, units, stop_trade_date, Total_stop_loss,stop_loss_pct,Total_Take_Profit,
                  Position_Long,Position_Neutral,Position_Short,TN_trades =100, position=0, leverage=5, strategy="PV"):        
         
         self.client = client  
@@ -40,6 +40,8 @@ class FuturesTrader_BN:
         self.stop_loss_price = None
         self.current_price = None
         self.filled_quantity = None
+        print(self.symbol,self.leverage)
+        self.client.futures_account()
     
     def start_trading(self,historical_days):
         self.client.futures_change_leverage(symbol = self.symbol, leverage = self.leverage) 

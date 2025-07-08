@@ -175,4 +175,3 @@ def define_strategy_Bollinger_breakout(data, parameters):
     data.loc[cond1, "position"] = 1
     data.loc[cond2, "position"] = -1
     return data
-

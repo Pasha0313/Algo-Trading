@@ -422,6 +422,8 @@ class FuturesTrader_IB:
                     self.prepared_data = strategy.define_strategy_ADX_ATR_Bollinger_Stochastic_RSI(data, self.parameters)   
                 elif self.strategy == "Supertrend_Stochastic_RSI":  # 133. **SuperTrend with Stochastic RSI**
                     self.prepared_data = strategy.define_strategy_Supertrend_Stochastic_RSI(data, self.parameters)   
+                elif self.strategy == "Trend_Momentum_RSI_Volatility":  # 134. ** EMA + MACD + ADX + RSI + ATR hybrid strategy **
+                    self.prepared_data = strategy.define_strategy_Trend_Momentum_RSI_Volatility(data, self.parameters)                      
                 self.execute_trades()
 
             time.sleep(1)
