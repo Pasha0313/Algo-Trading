@@ -1,7 +1,7 @@
 from Main_Binance import run_binance 
 from Main_Interactive import run_interactive
 
-Mode = "backtest"   # other options:"optimize", "backtest", "live"
+Mode = "backtest" # other options:"optimize", "backtest", "live"
 
 Broker = "Binance"
 # Broker = "Interactive Broker"
