@@ -10,7 +10,7 @@ class StrategyLoader:
         """Fetch the strategy config by its name"""
         return self.strategies.get(strategy_name, None)
 
-    def process_strategy(self, strategy_name):
+    def process_strategy(self, strategy_name,Print_Data):
         """Process and return the strategy config in a suitable format"""
         strategy_config = self.get_strategy_config(strategy_name)
         
@@ -20,7 +20,7 @@ class StrategyLoader:
         # Get the description, parameters, and ranges
         description = strategy_config["description"]
         parameters = tuple(strategy_config["parameters"])
-        print('CheckUP : ',parameters)
+        if Print_Data : print('CheckUP : ',parameters)
         param_ranges = {}
 
         # Convert parameter ranges to appropriate range/list objects dynamically

@@ -21,11 +21,6 @@ from binance import Client
 import warnings
 warnings.filterwarnings("ignore")
 
-Broker = "Binance"
-#Broker = "Interactive Broker"
-
-print(f"\nThe Broker is {Broker}\n")
-
 Path_Configs ="Configs"
 os.makedirs(Path_Configs, exist_ok=True)
 
@@ -33,17 +28,23 @@ os.makedirs(Path_Configs, exist_ok=True)
 def get_BN_price(symbol, client):
     return float(client.futures_symbol_ticker(symbol=symbol)['price'])
 
-def run_binance(Mode):
+def run_binance(Broker):
     config = Loading_Config_BN.load_config_from_text(os.path.join(Path_Configs, "Config_BN.txt"))
     strategy_loader = StrategyLoader(os.path.join(Path_Configs,"strategies_config.json"))
 
     # Get control settings
-    Unsupervised_Learning, Perform_Testing, Print_Data, Perform_Forecasting, Perform_Tuner, Perform_Trading\
+    Optimize_All,Unsupervised_Learning, Perform_BackTesting, Print_Data, Perform_Forecasting, Perform_Tuner, Perform_Trading\
     = Loading_Config_BN.get_control_settings(config)
+    if Optimize_All : 
+        mode = "Optimize"
+    elif Perform_BackTesting :   
+        mode = "BackTesting"  
+    elif Perform_Trading :   
+        mode = "LiveTrading"  
 
     # Prepare data and get individual values
     start_date, end_date, symbol, bar_length, leverage, strategy, tc, test_days,metric , ForecastModelName ,\
-    future_forecast_steps = Loading_Config_BN.prepare_data_from_config(config)
+    future_forecast_steps = Loading_Config_BN.prepare_data_from_config(config,Broker=Broker,mode=mode)
 
     # Load API keys from file
     try:
@@ -57,9 +58,10 @@ def run_binance(Mode):
     print("Successfully connected to Binance!\n")
 
 ################################################################################################################  
-    if Mode == "optimize":
+    if Optimize_All:
+        print("\n🚀 Running optimizer: Evaluating multiple strategies and bar lengths to identify the top-performing configuration by Sharpe ratio.\n")
         Strategy_Optimizer.run_optimizer(client=client,start_date=start_date, end_date=end_date,symbol=symbol,tc=tc, \
-                                         leverage=leverage,metric=metric)
+                                         leverage=leverage,metric=metric, Print_Data = Print_Data)
 
 ################################################################################################################  
     if Unsupervised_Learning:
@@ -67,7 +69,7 @@ def run_binance(Mode):
         Unsupervised_learning_trading_strategy()
 
 ################################################################################################################   
-    if Perform_Testing:
+    if Perform_BackTesting:
         print("\nFutures Back Testing is enabled\n")
 
         description, parameters_BT, param_ranges_BT = strategy_loader.process_strategy(strategy)
@@ -82,14 +84,14 @@ def run_binance(Mode):
         backtesting.test_strategy(parameters_BT)
         backtesting.add_leverage(leverage=leverage)
         backtesting.plot_strategy_comparison(leverage=True,plot_name=f"{symbol}_{strategy}")
-        backtesting.plot_all_indicators(plot_name=f"{symbol}_{strategy}")
+        backtesting.plot_all_indicators(plot_name=f"{symbol}_{strategy}", Print_Data = Print_Data)
         print(backtesting.results.trades.value_counts())
-        parameters_BT  = backtesting.optimize_strategy(param_ranges_BT,metric,output_file=f"{strategy}_optimize_results.csv")
+        parameters_BT  = backtesting.optimize_strategy(param_ranges_BT,metric,output_file=f"{strategy}_optimize_results.csv", Print_Data = Print_Data)
         if not parameters_BT == None :      
             backtesting.test_strategy(parameters_BT)
             backtesting.add_leverage(leverage=leverage)
             backtesting.plot_strategy_comparison(leverage=True,plot_name=f"WOpt_{symbol}_{strategy}")
-            backtesting.plot_all_indicators(plot_name=f"{symbol}_{strategy}")
+            backtesting.plot_all_indicators(plot_name=f"{symbol}_{strategy}", Print_Data = Print_Data)
         else :
             print("Parameters (BT) is : None")
 ################################################################################################################   

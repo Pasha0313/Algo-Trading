@@ -286,10 +286,8 @@ class BackTesting_BN(BackTestingBase_BN):
         elif self.strategy == "Supertrend_Stochastic_RSI":  # 133. **SuperTrend with Stochastic RSI**
             self.results = strategy.define_strategy_Supertrend_Stochastic_RSI(data, parameters)                                                                                     
 
-
-    def optimize_strategy(self, param_ranges, metric="Multiple", output_file=None):
-        print("\nOptimize Strategy is running.")
-
+    def optimize_strategy(self, param_ranges, metric="Multiple", output_file=None, Print_Data = False):
+        if Print_Data : print("\nOptimize Strategy is running.")
         # Select the performance function based on the metric
         if metric == "Multiple":
             performance_function = self.calculate_multiple
@@ -312,11 +310,11 @@ class BackTesting_BN(BackTestingBase_BN):
                 performance.append(result)
                 valid_combinations.append(params)
             else:                
-                print(f"There is Nan in Performace Optimization")
+                if Print_Data : print(f"There is Nan in Performace Optimization")
 
         self.results_overview = pd.DataFrame(data=valid_combinations, columns=list(param_ranges.keys()))
         self.results_overview["performance"] = performance
-        print(f"Performance values:\n{self.results_overview}")
+        if Print_Data : print(f"Performance values:\n{self.results_overview}")
         self.results_overview.to_csv(os.path.join(Optimize_folder,'ALL_'+output_file), index=False)
         best_params = self.find_best_strategy(output_file)
         return best_params
@@ -337,8 +335,11 @@ class BackTesting_BN(BackTestingBase_BN):
 
             best = self.results_overview.nlargest(1, "performance").iloc[0]
             best_params = best.to_dict()
-            print(f"Best strategy parameters: {best_params}")
-
+            #print(f"Best strategy parameters: {best_params}")
+            print("✅ Best Strategy Parameters:")
+            for name, value in best_params.items():
+                print(f"{name:<35}: {value:>10.2f}")
+            print("\/" * 25)
             best_params_tuple = tuple(best_params.values())
             self.test_strategy(best_params_tuple)
 

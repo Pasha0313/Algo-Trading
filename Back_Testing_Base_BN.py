@@ -57,7 +57,7 @@ class BackTestingBase_BN:
         data["creturns"] = data["returns"].cumsum().apply(np.exp)
         data["cstrategy"] = data["strategy"].cumsum().apply(np.exp)
         self.results = data
-        self.print_performance()
+        #self.print_performance()
 
     def run_backtest(self):
         if self.results is None:
@@ -77,10 +77,10 @@ class BackTestingBase_BN:
         data["eff_lev"] = leverage * (1 + data.session_compound) / (1 + data.session_compound * leverage)
         data.eff_lev.fillna(leverage, inplace=True)
         data.loc[data.trades != 0, "eff_lev"] = leverage
-        levered_returns = data.eff_lev.shift() * data.simple_ret
-        levered_returns = np.where(levered_returns < -1, -1, levered_returns)
-        data["strategy_levered"] = levered_returns
-        data["cstrategy_levered"] = data.strategy_levered.add(1).cumprod()
+        leverage_returns = data.eff_lev.shift() * data.simple_ret
+        leverage_returns = np.where(leverage_returns < -1, -1, leverage_returns)
+        data["strategy_leverage"] = leverage_returns
+        data["cstrategy_leverage"] = data.strategy_leverage.add(1).cumprod()
         self.results = data
 
         if report:
@@ -101,7 +101,7 @@ class BackTestingBase_BN:
             raise ValueError("No strategy results to analyze.")
 
         data = self.results.copy()
-        to_analyze = np.log(data["strategy_levered"].add(1)) if leverage else data.strategy
+        to_analyze = np.log(data["strategy_leverage"].add(1)) if leverage else data.strategy
 
         strategy_multiple = round(self.calculate_multiple(to_analyze), 6)
         bh_multiple = round(self.calculate_multiple(data["returns"]), 6)
@@ -111,18 +111,39 @@ class BackTestingBase_BN:
         ann_std = round(self.calculate_annualized_std(to_analyze), 6)
         sharpe = round(self.calculate_sharpe(to_analyze), 6)
 
-        print("=" * 100)
-        print(f"STRATEGY PERFORMANCE | INSTRUMENT = {self.symbol}")
-        print("-" * 100)
-        print(f"Strategy Multiple:           {strategy_multiple}")
-        print(f"Buy-and-Hold Multiple:       {bh_multiple}")
-        print(f"Out-/Underperformance:       {outperf}")
-        print(f"CAGR:                        {cagr}")
-        print(f"Annualized Mean Return:      {ann_mean}")
-        print(f"Annualized Standard Deviation: {ann_std}")
-        print(f"Sharpe Ratio:                {sharpe}")
-        print("=" * 100)
+        #print("=" * 50)
+        #print(f"STRATEGY PERFORMANCE | INSTRUMENT = {self.symbol}")
+        #print("-" * 50)
+        #print(f"Strategy Multiple:           {round(strategy_multiple,2)}")
+        #print(f"Buy-and-Hold Multiple:       {round(bh_multiple,2)}")
+        #print(f"Out-/Underperformance:       {round(outperf,2)}")
+        #print(f"CAGR:                        {round(cagr,2)}")
+        #print(f"Annualized Mean Return:      {round(ann_mean,2)}")
+        #print(f"Annualized Standard Deviation: {round(ann_std,2)}")
+        #print(f"Sharpe Ratio:                {round(sharpe,2)}")
+        #print("=" * 50)
+        
+        print("=" * 50)
+        print(f"📊 STRATEGY PERFORMANCE | Symbol = {self.symbol}")
+        print("-" * 50)
 
+        metrics = {
+            "Strategy Multiple": strategy_multiple,
+            "Buy-and-Hold Multiple": bh_multiple,
+            "Out-/Underperformance": outperf,
+            "CAGR": cagr,
+            "Annualized Mean Return": ann_mean,
+            "Annualized Std. Dev.": ann_std,
+            "Sharpe Ratio": sharpe
+        }
+
+        for name, value in metrics.items():
+            print(f"{name:<35}: {value:>10.2f}")
+
+        print("=" * 50)
+
+
+        return strategy_multiple,bh_multiple,outperf,cagr,ann_mean,ann_std,sharpe
     def calculate_multiple(self, series):
         return np.exp(series.sum())
 
@@ -147,7 +168,7 @@ class BackTestingBase_BN:
 #                                       plot_results
 #######################################################################################################
 
-    def plot_strategy_comparison(self, leverage=False,plot_name=None):
+    def plot_strategy_comparison(self, leverage=False,plot_name=None,plot_show=True):
         if self.results is None:
             logger.warning("Run test_strategy() first.")
         else:
@@ -158,16 +179,18 @@ class BackTestingBase_BN:
             plt.figure(figsize=(10, 6))
             plt.plot(self.results.index, self.results["creturns"], label="Buy and Hold")
             plt.plot(self.results.index, self.results["cstrategy"], label="Strategy")
-            if leverage and "cstrategy_levered" in self.results.columns:
-                plt.plot(self.results.index, self.results["cstrategy_levered"], label="Strategy Leverage")
+            if leverage and "cstrategy_leverage" in self.results.columns:
+                plt.plot(self.results.index, self.results["cstrategy_leverage"], label="Strategy Leverage")
             plt.xticks(rotation=45)
             plt.title(title)
             plt.legend()
             plt.savefig(os.path.join(Plot_folder, f'Comparison_{plot_name}.png'))            
-            plt.show()
-            
+            if plot_show:
+                plt.show()
+            else:
+                plt.close()
 
-    def plot_results_II(self):
+    def plot_results_II(self,plot_show=True):
         ''' Plots a scatter plot of volume change against returns.
         '''
         if self.results is None:
@@ -176,10 +199,12 @@ class BackTestingBase_BN:
             plt.scatter(x=self.results['vol_ch'], y=self.results['returns'])
             plt.xlabel("Volume Change")
             plt.ylabel("Returns")
-            plt.title(f"{self.symbol} | TC = {self.tc}")
-            plt.show()
+            if plot_show:
+                plt.show()
+            else:
+                plt.close()
 
-    def plot_heatmap(self):
+    def plot_heatmap(self,plot_show=True):
         ''' Bins returns and volume change, creates a crosstab matrix, and plots a heatmap.
         '''
         if self.results is None:
@@ -199,7 +224,10 @@ class BackTestingBase_BN:
             plt.title(f"Heatmap of Volume Change vs Returns | {self.symbol} | TC = {self.tc}")
             plt.xlabel("Return cat")
             plt.ylabel("Volume cat")
-            plt.show()
+            if plot_show:
+                plt.show()
+            else:
+                plt.close()
 
             #matrix_II = pd.crosstab(self.results['vol_cat'].shift(), self.results['ret_cat'].shift(),values = self.results, aggfunc =np.mean)
 
@@ -218,9 +246,12 @@ class BackTestingBase_BN:
             plt.title(f"Heatmap of Volume Change vs Returns | {self.symbol} | TC = {self.tc}")
             plt.xlabel("Return cat")
             plt.ylabel("Volume cat")
-            plt.show()    
+            if plot_show:
+                plt.show()
+            else:
+                plt.close()   
 
-    def plot_all_indicators(self, plot_name=None):
+    def plot_all_indicators(self, plot_name=None,plot_show=True, Print_Data= False):
         if self.results is None:
             logger.warning("Run test_strategy() first.")
             return
@@ -230,7 +261,7 @@ class BackTestingBase_BN:
         title = f"{self.strategy} | {self.symbol} | TC = {self.tc}"
         
         available_columns = data.columns
-        print(f"Available columns in results: {available_columns}")
+        if Print_Data : print(f"Available columns in results: {available_columns}")
 
         if "Stoch_RSI" in available_columns:
             data["Stoch_RSI_n"] = data["Stoch_RSI"] * 100  
@@ -296,4 +327,7 @@ class BackTestingBase_BN:
 
         plot_path = os.path.join(Plot_folder, f'Indicators_{plot_name}.png') if plot_name else f'Indicators_plot.png'
         plt.savefig(plot_path)
-        plt.show()
+        if plot_show:
+            plt.show()
+        else:
+            plt.close()
