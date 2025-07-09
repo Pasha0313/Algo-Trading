@@ -57,7 +57,7 @@ def run_interactive():
     strategy_loader = StrategyLoader(os.path.join(Path_Configs,"strategies_config.json"))
 
     # Get control settings
-    Unsupervised_Learning, Perform_Testing, Print_Data, Perform_Forecasting, Perform_Tuner, Perform_Trading\
+    Unsupervised_Learning, Perform_BackTesting, Print_Data, Perform_Forecasting, Perform_Tuner, Perform_Trading\
     = Loading_Config_IB.get_control_settings(config)
 
     print("\nAttempt : Connecting to Interactive Brokers...")
@@ -85,7 +85,7 @@ def run_interactive():
         Unsupervised_learning_trading_strategy()
 
 ################################################################################################################   
-    if Perform_Testing:
+    if Perform_BackTesting:
         print("\nFutures Back Testing is enabled\n")
 
         description, parameters_BT, param_ranges_BT = strategy_loader.process_strategy(strategy)
@@ -100,14 +100,14 @@ def run_interactive():
         backtesting.test_strategy(parameters_BT)
         backtesting.add_leverage(leverage=leverage)
         backtesting.plot_strategy_comparison(leverage=True,plot_name=f"{contract.symbol}_{strategy}")
-        backtesting.plot_all_indicators(plot_name=f"{contract.symbol}_{strategy}")
+        backtesting.plot_all_indicators(plot_name=f"{contract.symbol}_{strategy}", Print_Data = Print_Data)
         print(backtesting.results.trades.value_counts())
         parameters_BT  = backtesting.optimize_strategy(param_ranges_BT,metric,output_file=f"{strategy}_optimize_results.csv")
         if not parameters_BT == None :      
             backtesting.test_strategy(parameters_BT)
             backtesting.add_leverage(leverage=leverage)
             backtesting.plot_strategy_comparison(leverage=True,plot_name=f"WOpt_{contract.symbol}_{strategy}")
-            backtesting.plot_all_indicators(plot_name=f"{contract.symbol}_{strategy}")
+            backtesting.plot_all_indicators(plot_name=f"{contract.symbol}_{strategy}", Print_Data = Print_Data)
         else :
             print("Parameters (BT) is : None")
 ################################################################################################################   

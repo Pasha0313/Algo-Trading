@@ -13,14 +13,15 @@ def load_config_from_text(filename):
 
 def get_control_settings(config):
     # Extract control settings
+    Optimize_All = config.get("Optimize_All", "False").lower() == "true"
     Unsupervised_Learning = config.get("Unsupervised_Learning", "False").lower() == "true"
-    Perform_Testing = config.get("Perform_Testing", "False").lower() == "true"
+    Perform_BackTesting = config.get("Perform_BackTesting", "False").lower() == "true"
     Print_Data = config.get("Print_Data", "False").lower() == "true"
     Perform_Forecasting = config.get("Perform_Forecasting", "False").lower() == "true"
     Perform_Tuner = config.get("Perform_Tuner", "False").lower() == "true"
     Perform_Trading = config.get("Perform_Trading", "False").lower() == "true"
 
-    return Unsupervised_Learning, Perform_Testing, Print_Data,Perform_Forecasting, Perform_Tuner,Perform_Trading
+    return Optimize_All,Unsupervised_Learning, Perform_BackTesting, Print_Data,Perform_Forecasting, Perform_Tuner,Perform_Trading
 
 def print_config_values(symbol, bar_length, leverage, strategy, tc, test_days):
     print("\nIndividual Values:")
@@ -31,7 +32,7 @@ def print_config_values(symbol, bar_length, leverage, strategy, tc, test_days):
     print(f"Trading Costs: {tc:.5f}")
     print(f"Days: {test_days}")
 
-def prepare_data_from_config(config):
+def prepare_data_from_config(config,Broker,mode):
     # Extract and convert values
     symbol = config.get("symbol", "BTCUSDT")
     bar_length = config.get("bar_length", "15m")
@@ -51,6 +52,8 @@ def prepare_data_from_config(config):
 
     # Prepare data
     input_data = [
+        ["Broker", Broker],
+        ["mode", mode],
         ["Symbol", symbol],
         ["Bar Length", bar_length],
         ["Leverage", leverage],

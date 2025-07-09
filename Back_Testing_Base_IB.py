@@ -215,7 +215,7 @@ class BackTestingBase_IB:
             plt.ylabel("Volume cat")
             plt.show()
 
-    def plot_all_indicators(self, plot_name=None):
+    def plot_all_indicators(self, plot_name=None, Print_Data = False):
         if self.results is None:
             logger.warning("Run test_strategy() first.")
             return
@@ -223,7 +223,7 @@ class BackTestingBase_IB:
         data = self.results.copy()
         title = f"{self.strategy} | {self.symbol} | TC = {self.tc}"
         available_columns = data.columns
-        print(f"Available columns in results: {available_columns}")
+        if Print_Data : print(f"Available columns in results: {available_columns}")
 
         if "Stoch_RSI" in available_columns:
             data["Stoch_RSI_n"] = data["Stoch_RSI"] * 100
