@@ -1,26 +1,26 @@
 ########################################
 ############     Control     ###########
 ########################################
-Perform_Testing = False
+Perform_BackTesting = True
 Print_Data      = False
-Perform_Trading = True
+Perform_Trading = False
 
 ########################################
 ############      Main       ###########
 ########################################
-symbol     = EURUSD
-asset_type = forex
-secType    = None
+symbol     = XAUUSD
+asset_type = CMDTY
+secType    = CFD
 timezone   = US/Eastern
 expiry     = None
-exchange   = IDEALPRO
+exchange   = SMART
 currency   = USD
-bar_length = 1 min
-duration   = 3 D
+bar_length = 5 mins
+duration   = 30 D
 what_to_show=MIDPOINT
 use_rth=True
 leverage=1
-strategy=RSI
+strategy=Bollinger_Stochastic_RSI
 tc=-0.001
 metric=Sharpe
 
@@ -82,3 +82,12 @@ Position_Short = True
 ## timezone=US/Eastern
 ## expiry=20250425
 ## exchange=PAXOS
+##
+########################################
+## symbol     = DAX    
+## asset_type = cfd
+## secType    = CFD
+## timezone   = US/Eastern
+## expiry     = None
+## exchange   = IBIS
+## currency   = EUR
