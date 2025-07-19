@@ -16,12 +16,13 @@ def get_control_settings(config):
     Optimize_All = config.get("Optimize_All", "False").lower() == "true"
     Unsupervised_Learning = config.get("Unsupervised_Learning", "False").lower() == "true"
     Perform_BackTesting = config.get("Perform_BackTesting", "False").lower() == "true"
+    Perform_MLBackTesting = config.get("Perform_MLBackTesting", "False").lower() == "true"
     Print_Data = config.get("Print_Data", "False").lower() == "true"
     Perform_Forecasting = config.get("Perform_Forecasting", "False").lower() == "true"
     Perform_Tuner = config.get("Perform_Tuner", "False").lower() == "true"
     Perform_Trading = config.get("Perform_Trading", "False").lower() == "true"
 
-    return Optimize_All,Unsupervised_Learning, Perform_BackTesting, Print_Data,Perform_Forecasting, Perform_Tuner,Perform_Trading
+    return Optimize_All,Unsupervised_Learning, Perform_BackTesting, Perform_MLBackTesting ,Print_Data,Perform_Forecasting, Perform_Tuner,Perform_Trading
 
 def print_config_values(symbol, bar_length, leverage, strategy, tc, test_days):
     print("\nIndividual Values:")
