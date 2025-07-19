@@ -2,11 +2,11 @@
 ############      Main       ###########
 ########################################
 symbol=BTCUSDT
-bar_length=1h
-leverage=5
+bar_length=15m
+leverage=2
 strategy=MACD
 tc=-0.001
-test_days=5
+test_days=60
 metric=Sharpe
 
 ########################################
@@ -20,7 +20,8 @@ FutureForecastSteps=10
 ########################################
 Optimize_All = False
 Unsupervised_Learning=False
-Perform_BackTesting=True
+Perform_BackTesting=False
+Perform_MLBackTesting=True
 Print_Data=False
 Perform_Forecasting=False
 Perform_Tuner=False
