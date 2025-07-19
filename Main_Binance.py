@@ -1,5 +1,6 @@
 import Loading_Config_BN as Loading_Config_BN
 import Loading_Config_IB as Loading_Config_IB
+from Back_Testing_ML_BN import ML_Strategies
 import pandas as pd
 import os
 import Strategy_Optimizer
@@ -33,12 +34,14 @@ def run_binance(Broker):
     strategy_loader = StrategyLoader(os.path.join(Path_Configs,"strategies_config.json"))
 
     # Get control settings
-    Optimize_All,Unsupervised_Learning, Perform_BackTesting, Print_Data, Perform_Forecasting, Perform_Tuner, Perform_Trading\
+    Optimize_All,Unsupervised_Learning, Perform_BackTesting,Perform_MLBackTesting, Print_Data, Perform_Forecasting, Perform_Tuner, Perform_Trading\
     = Loading_Config_BN.get_control_settings(config)
     if Optimize_All : 
         mode = "Optimize"
     elif Perform_BackTesting :   
-        mode = "BackTesting"  
+        mode = "BackTesting" 
+    elif Perform_MLBackTesting :
+        mode = "MLBackTesting"                 
     elif Perform_Trading :   
         mode = "LiveTrading"  
 
@@ -94,6 +97,23 @@ def run_binance(Broker):
             backtesting.plot_all_indicators(plot_name=f"{symbol}_{strategy}", Print_Data = Print_Data)
         else :
             print("Parameters (BT) is : None")
+################################################################################################################   
+    if (Perform_MLBackTesting):
+        ml_strategy = ML_Strategies(client=client, symbol=symbol, bar_length=bar_length,
+                                    start=start_date, end=end_date, tc=tc)
+
+        # Step 1: Feature engineering
+        ml_strategy.ML_Strategy(CFModel=None, parameters=None)
+
+        # Step 2: Train model
+        ml_strategy.run_model(model_type='rf') #xgb
+
+        # Step 3 (Optional): Run backtesting with `backtesting.py` Strategy
+        ml_strategy.run_backtesting_strategy()
+
+        # Step 4: Plot performance with leverage
+        ml_strategy.plot_performance(leverage=leverage)
+
 ################################################################################################################   
     if (Perform_Forecasting) :
         print("\nFutures Forecast Testing is enabled\n")
