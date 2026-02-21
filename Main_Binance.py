@@ -1,9 +1,9 @@
 import Loading_Config_BN as Loading_Config_BN
 import Loading_Config_IB as Loading_Config_IB
 from Back_Testing_ML_BN import ML_Strategies
+import Strategy_Optimizer
 import pandas as pd
 import os
-import Strategy_Optimizer
 
 from Config_Check import make_request_with_retries,Debug_function
 from tkinter import TRUE
@@ -13,7 +13,6 @@ from Forecast_Testing import ForecastTesting
 from Loading_Strategy import StrategyLoader
 from Loading_ForecastModel import LoadingForecastModel
 from Unsupervised_learning_trading_strategy import Unsupervised_learning_trading_strategy
-
 
 from ib_insync import *
 #from ib_insync import IB, Forex, Stock, Future, Contract
@@ -34,7 +33,7 @@ def run_binance(Broker):
     strategy_loader = StrategyLoader(os.path.join(Path_Configs,"strategies_config.json"))
 
     # Get control settings
-    Optimize_All,Unsupervised_Learning, Perform_BackTesting,Perform_MLBackTesting, Print_Data, Perform_Forecasting, Perform_Tuner, Perform_Trading\
+    Optimize_All,Unsupervised_Learning, Perform_BackTesting,Perform_MLBackTesting, Perform_MLFutureTesting, Print_Data, Perform_Forecasting, Perform_Tuner, Perform_Trading\
     = Loading_Config_BN.get_control_settings(config)
     if Optimize_All : 
         mode = "Optimize"
@@ -42,6 +41,8 @@ def run_binance(Broker):
         mode = "BackTesting" 
     elif Perform_MLBackTesting :
         mode = "MLBackTesting"                 
+    elif Perform_MLFutureTesting :
+        mode = "MLFutureTesting"
     elif Perform_Trading :   
         mode = "LiveTrading"  
 
@@ -114,6 +115,54 @@ def run_binance(Broker):
         # Step 4: Plot performance with leverage
         ml_strategy.plot_performance(leverage=leverage)
 
+    if Perform_MLFutureTesting:
+        ml = ML_Strategies(
+            client=client,
+            symbol=symbol,
+            bar_length=bar_length,
+            start=start_date,
+            end=end_date,
+            tc=tc
+        )
+
+        ml.ML_Strategy(CFModel=None, parameters=None)
+
+        # 1) Conv1D
+        forecast_df_conv1d = ml.run_future_prediction_conv1d_binance(
+            future_steps=48,
+            eval_h=24,
+            n_trials=30,
+            skip_tuning_if_best_exists=False,
+            window_size=3000,
+            step_size=750,
+            wfv_test_slice=50,
+            wfv_max_epochs=8,
+            wfv_patience=2,
+            enable_eager_debug=False,
+            final_epochs=20,
+            global_seed=42,
+            output_dir="Forecasts",
+        )
+
+        # 2) Transformer
+        forecast_df_tr = ml.run_future_prediction_transformer_binance_optuna(
+            future_steps=48,
+            eval_h=24,
+            n_trials=30,
+            skip_tuning_if_best_exists=False,
+            window_size=3000,
+            step_size=750,
+            wfv_test_slice=50,
+            wfv_max_epochs=8,
+            wfv_patience=2,
+            final_epochs=20,
+            global_seed=42,
+            enable_eager_debug=False,
+            output_dir="Forecasts",
+        )
+
+        print("Conv1D forecast head:\n", forecast_df_conv1d.head())
+        print("Transformer forecast head:\n", forecast_df_tr.head())
 ################################################################################################################   
     if (Perform_Forecasting) :
         print("\nFutures Forecast Testing is enabled\n")
