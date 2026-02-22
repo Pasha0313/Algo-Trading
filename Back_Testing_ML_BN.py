@@ -86,14 +86,8 @@ class ML_Strategies:
             raise
 
     def ML_Strategy(self, CFModel, parameters, Perform_Tuner=False):
-        data = self.data.copy()
-        data['change_tomorrow'] = data.Close.pct_change(-1) * 100 * -1
-        data = data.dropna().copy()
-        data['change_tomorrow_direction'] = np.where(data.change_tomorrow > 0, 1, 0)
-
-        self.data = data                
         self.create_advanced_features() 
-
+        print("\n📋 Final feature columns:", self.data.columns.tolist())
         self.data.Close.plot()
 
     def create_advanced_features(self):
@@ -105,16 +99,17 @@ class ML_Strategies:
 
         data = self.data.copy()
 
-        '''strategy = "Stochastic_RSI"
+        data["log_close"] = np.log(data["Close"])
+        data["ret1"] = data["log_close"].diff()
+
+        strategy = "Stochastic_RSI"
         description, parameters, _ = strategy_loader.process_strategy(strategy,Print_Data=False)
         #print(f"\nStrategy: {strategy}, Description: {description}")
         data = STRATEGY.define_strategy_Stochastic_RSI(data, parameters)
 
         if 'position' in data.columns:
             data = data.drop(columns='position')
-        
-        #print("\n📋 Feature columns:", data.columns.tolist())
-        
+                
         strategy = "Bollinger_EMA"
         description, parameters, _ = strategy_loader.process_strategy(strategy,Print_Data=False)
         #print(f"\nStrategy: {strategy}, Description: {description}")
@@ -122,11 +117,9 @@ class ML_Strategies:
         data = STRATEGY.define_strategy_Bollinger_EMA(data, parameters)
 
         if 'position' in data.columns:
-            data = data.drop(columns='position')      '''      
+            data = data.drop(columns='position')           
 
-        print("\n📋 Final feature columns:", data.columns.tolist())
-
-        self.data = data  
+        self.data = data.copy()  
 
     def run_model(self, model_type='rf'):
         y = self.data["change_tomorrow_direction"].copy()
@@ -493,8 +486,13 @@ class ML_Strategies:
 
 
     # ============================================================
+    # ============================================================
+    # ============================================================
     # Conv1D | Optuna + WFV | Direction objective
     # ============================================================
+    # ============================================================
+    # ============================================================
+
     def run_future_prediction_conv1d_binance(
         self,
         future_steps: int = 48,
@@ -531,11 +529,21 @@ class ML_Strategies:
         # stability knobs
         fixed_time_step: int = 64,
         fixed_batch_size: int = 64,
+
+        # NEW: feature + loss upgrades
+        auto_add_core_features: bool = True,
+        use_horizon_weighted_loss: bool = True,
+        loss_decay: float = 0.01,   # smaller = flatter weights; larger = focus near-term
     ):
         """
         Conv1D future prediction for Binance data.
-        Optuna objective: MAXIMIZE median direction accuracy at horizon eval_h using walk-forward validation.
-        Exports: forecast CSV + history+forecast plot + EMA actual-vs-pred plot.
+
+        Target (Y): forward log-returns relative to anchor close:
+            y_path[t] = log( Close_{t+1} / Close_{t0} )
+
+        Improvements added here:
+        - auto_add_core_features: add EMA/ATR/range/ret1 features inside this function
+        - horizon-weighted MSE: emphasizes near-term steps to reduce long-horizon drift/smoothing
         """
 
         import os, json, gc
@@ -603,23 +611,43 @@ class ML_Strategies:
 
         if not isinstance(df.index, pd.DatetimeIndex):
             raise ValueError("self.data must have a DatetimeIndex.")
-        if "Close" not in df.columns:
-            raise ValueError("Expected 'Close' column in self.data (Binance OHLCV).")
+        for c in ["Open", "High", "Low", "Close", "Volume"]:
+            if c not in df.columns:
+                raise ValueError(f"Expected '{c}' column in self.data (Binance OHLCV).")
 
         df = df.sort_index()
         if not df.index.is_unique:
             df = df[~df.index.duplicated(keep="last")]
 
         # ----------------------------
+        # NEW: ensure strong engineered features exist
+        # ----------------------------
+        if auto_add_core_features:
+            # adds: close, log_close, ret1, ema20, ema50, ema20_slope, hl_range, atr14, close_minus_ema20
+            # (uses original OHLCV)
+            df_feat = self._add_plot_features_from_binance_ohlcv(df.copy())
+            # keep original OHLCV columns too
+            for c in df.columns:
+                if c not in df_feat.columns:
+                    df_feat[c] = df[c]
+            df = df_feat.replace([np.inf, -np.inf], np.nan).dropna()
+
+        # ----------------------------
         # Feature columns
         # ----------------------------
         if feature_cols is None:
+            # keep Close out of X to avoid trivial leakage
             drop_cols = {"Open", "High", "Low", "Close", "Volume", "ml_target", "prediction"}
             drop_cols |= {"change_tomorrow", "change_tomorrow_direction"}
+            # allow engineered predictors
             feature_cols = [c for c in df.columns if c not in drop_cols]
 
+        # hard drop leakage columns if present
+        leakage = {"change_tomorrow", "change_tomorrow_direction", "prediction", "ml_target"}
+        feature_cols = [c for c in feature_cols if c not in leakage]
+
         if not feature_cols:
-            raise ValueError("feature_cols is empty. Run ML_Strategy() first or pass feature_cols explicitly.")
+            raise ValueError("feature_cols is empty. Ensure engineered features exist or pass feature_cols explicitly.")
 
         # ----------------------------
         # Split
@@ -643,16 +671,20 @@ class ML_Strategies:
         # Scale features (train-only)
         # ----------------------------
         feat_scaler = MinMaxScaler()
-        train_feat_scaled = feat_scaler.fit_transform(train_df[feature_cols].values)
-        test_feat_scaled = feat_scaler.transform(test_df[feature_cols].values)
+        train_feat_scaled = feat_scaler.fit_transform(train_df[feature_cols].astype(float).values)
+        test_feat_scaled = feat_scaler.transform(test_df[feature_cols].astype(float).values)
 
         train_df_scaled = pd.DataFrame(train_feat_scaled, index=train_df.index, columns=feature_cols)
         test_df_scaled = pd.DataFrame(test_feat_scaled, index=test_df.index, columns=feature_cols)
+
+        # keep raw close for target construction
         train_df_scaled["close"] = train_df["Close"].astype(float).values
         test_df_scaled["close"] = test_df["Close"].astype(float).values
 
         # ----------------------------
         # Sequences
+        # X: features
+        # Y: forward log-returns relative to anchor close: log(C_{t+1:t+f}/C_t)
         # ----------------------------
         def create_supervised_sequences(local_df: pd.DataFrame, cols: list, time_step: int, f_steps: int):
             feat_vals = local_df[cols].to_numpy(dtype=np.float32, copy=False)
@@ -677,6 +709,7 @@ class ML_Strategies:
                 X[r] = feat_vals[i - time_step:i]
                 c0 = close_vals[i]
                 future = close_vals[i + 1:i + 1 + f_steps]
+                # forward log-returns relative to c0 (NOT cumulative ret1)
                 Y[r] = np.log(future / c0).astype(np.float32)
                 idx.append(ts_index[i])
                 r += 1
@@ -684,11 +717,26 @@ class ML_Strategies:
             return X, Y, pd.Index(idx)
 
         # ----------------------------
+        # NEW: horizon-weighted MSE
+        # ----------------------------
+        def make_weighted_mse(f_steps: int, decay: float):
+            w = np.exp(-decay * np.arange(int(f_steps), dtype=np.float32))
+            w = w / np.mean(w)
+            w_tf = tf.constant(w, dtype=tf.float32)
+
+            def loss(y_true, y_pred):
+                # (batch, f_steps)
+                err2 = tf.square(y_true - y_pred)
+                return tf.reduce_mean(err2 * w_tf)
+            return loss
+
+        # ----------------------------
         # Conv1D builder
         # ----------------------------
         def build_conv1d(time_step: int, n_features: int, f_steps: int,
                         filters: int, kernel: int, dense_units: int,
                         dropout: float, lr_: float):
+
             inputs = Input(shape=(time_step, n_features))
             x = Conv1D(filters, kernel, padding="causal", activation="relu")(inputs)
             x = Conv1D(filters, kernel, padding="causal", activation="relu")(x)
@@ -703,10 +751,15 @@ class ML_Strategies:
             outputs = Dense(f_steps)(x)
 
             model = Model(inputs, outputs)
+
+            loss_fn = "mse"
+            if use_horizon_weighted_loss:
+                loss_fn = make_weighted_mse(f_steps=int(f_steps), decay=float(loss_decay))
+
             model.compile(
                 optimizer=tf.keras.optimizers.Adam(learning_rate=lr_),
-                loss="mse",
-                jit_compile=False,  # make sure we don’t trigger XLA
+                loss=loss_fn,
+                jit_compile=False,
             )
             return model
 
@@ -734,7 +787,6 @@ class ML_Strategies:
         # Optuna objective (WFV) - maximize median direction accuracy at eval_h
         # ----------------------------
         def make_objective(train_scaled_df: pd.DataFrame):
-            # Prebuild sequences ONCE per trial (still heavy, but we explicitly delete them)
             def objective(trial):
                 tf.keras.utils.set_random_seed(global_seed + int(trial.number))
                 np.random.seed(global_seed + int(trial.number))
@@ -761,7 +813,6 @@ class ML_Strategies:
                     if H < 1 or H > int(future_steps):
                         return float("-inf")
 
-                    # clamp window/step
                     max_window = n_seq - max(1, int(wfv_test_slice)) - 1
                     if max_window < max(100, int(wfv_min_samples)):
                         return float("-inf")
@@ -828,14 +879,12 @@ class ML_Strategies:
                                 callbacks=[es],
                             )
 
-                        # IMPORTANT: no @tf.function inside loop
                         pred = model.predict(X_test_w, batch_size=batch_size, verbose=0)
 
                         y_true_H = y_test_w[:, H - 1]
                         y_pred_H = pred[:, H - 1]
                         dir_accs.append(float(np.mean(np.sign(y_true_H) == np.sign(y_pred_H))))
 
-                        # window cleanup
                         del model, pred, X_train_w, y_train_w, X_test_w, y_test_w
                         tf.keras.backend.clear_session()
                         gc.collect()
@@ -846,7 +895,6 @@ class ML_Strategies:
                     return float(np.median(dir_accs))
 
                 finally:
-                    # trial cleanup: free the big arrays
                     del X_all, Y_all
                     tf.keras.backend.clear_session()
                     gc.collect()
@@ -885,7 +933,6 @@ class ML_Strategies:
             print(f"\n[{self.symbol}] Conv1D Best WFV DirAcc (median, H={eval_h}) = {best_score:.4f}")
             print(f"[{self.symbol}] Conv1D Best params:", best_params)
 
-        # Backward compatibility (older cache)
         if "time_step" not in best_params:
             best_params["time_step"] = int(TIME_STEP_FIXED)
         if "batch_size" not in best_params:
@@ -946,6 +993,11 @@ class ML_Strategies:
             test_mae = float(mean_absolute_error(Y_test_all.reshape(-1), Y_test_pred.reshape(-1)))
 
             H = int(eval_h)
+            if H < 1:
+                H = 1
+            if H > int(future_steps):
+                H = int(future_steps)
+
             y_true_H = Y_test_all[:, H - 1]
             y_pred_H = Y_test_pred[:, H - 1]
             dir_acc = float(np.mean(np.sign(y_true_H) == np.sign(y_pred_H)))
@@ -971,16 +1023,16 @@ class ML_Strategies:
             raise ValueError("Could not form anchor sequence (reduce time_step or add more history).")
 
         last_input = X_anchor[-1].reshape(1, ts, len(feature_cols))
-        pred_future_ret = model.predict(last_input, batch_size=1, verbose=0)[0]
+        pred_future_logret = model.predict(last_input, batch_size=1, verbose=0)[0]  # log(future/c0)
 
         anchor_price = float(df.loc[anchor_ts, "Close"])
-        forecast_prices = anchor_price * np.exp(pred_future_ret)
+        forecast_prices = anchor_price * np.exp(pred_future_logret)
 
         future_ts = pd.date_range(anchor_ts, periods=int(future_steps) + 1, freq=pandas_freq)[1:]
 
         forecast_df = pd.DataFrame({
             "timestamp": future_ts,
-            "forecast_forward_logret": pred_future_ret,
+            "forecast_forward_logret": pred_future_logret,
             "forecast_price": forecast_prices
         })
 
@@ -1043,7 +1095,6 @@ class ML_Strategies:
             last_days=5,
         )
 
-        # Final cleanup (helps before you start Transformer in same run)
         del X_train_all, Y_train_all, X_test_all, Y_test_all
         tf.keras.backend.clear_session()
         gc.collect()
@@ -1051,7 +1102,11 @@ class ML_Strategies:
         return forecast_df
 
     # ============================================================
+    # ============================================================
+    # ============================================================
     # Transformer | Optuna + WFV | Direction objective
+    # ============================================================
+    # ============================================================
     # ============================================================
     def run_future_prediction_transformer_binance_optuna(
         self,
@@ -1063,14 +1118,14 @@ class ML_Strategies:
         test_end: str = None,
 
         # Optuna / WFV
-        n_trials: int = 30,
+        n_trials: int = 15,                 # safer default
         skip_tuning_if_best_exists: bool = False,
-        window_size: int = 3000,
+        window_size: int = 1500,            # safer default
         step_size: int = 750,
-        wfv_test_slice: int = 50,
+        wfv_test_slice: int = 25,           # safer default
         wfv_val_split: float = 0.2,
         wfv_min_samples: int = 300,
-        wfv_max_epochs: int = 8,
+        wfv_max_epochs: int = 4,            # safer default
         wfv_patience: int = 2,
 
         # Final training
@@ -1086,20 +1141,34 @@ class ML_Strategies:
         tf_memory_growth: bool = True,
         tf_mixed_precision: bool = False,
         enable_eager_debug: bool = False,
+
+        # stability knobs (match Conv1D behavior)
+        fixed_time_step: int = 64,
+        fixed_batch_size: int = 64,
+
+        # NEW: feature + loss upgrades
+        auto_add_core_features: bool = True,
+        use_horizon_weighted_loss: bool = True,
+        loss_decay: float = 0.01,  # higher => more weight on near-term horizons
     ):
         """
         Transformer future prediction for Binance data using Optuna WFV objective.
         Objective: MAXIMIZE median direction accuracy at horizon eval_h.
+
+        Target (Y): forward log-returns relative to anchor close:
+            y_path[k] = log( Close_{t+1+k} / Close_t ), k=0..future_steps-1
 
         Exports:
         - forecast CSV
         - history+forecast plot
         - EMA actual-vs-pred plot (1-step reconstruction)
 
-        Notes:
-        - We avoid defining @tf.function inside loops (prevents retracing)
-        - We force jit_compile=False on model.compile (reduces XLA surprises)
-        - We aggressively delete large arrays inside trials to avoid WSL OOM ("Killed")
+        Stability:
+        - no @tf.function inside loops
+        - jit_compile=False
+        - aggressive cleanup
+        - optional engineered features inside this function
+        - optional horizon-weighted loss
         """
 
         import os, json, gc
@@ -1164,12 +1233,24 @@ class ML_Strategies:
 
         if not isinstance(df.index, pd.DatetimeIndex):
             raise ValueError("self.data must have a DatetimeIndex.")
-        if "Close" not in df.columns:
-            raise ValueError("Expected 'Close' column in self.data (Binance OHLCV).")
+        for c in ["Open", "High", "Low", "Close", "Volume"]:
+            if c not in df.columns:
+                raise ValueError(f"Expected '{c}' column in self.data (Binance OHLCV).")
 
         df = df.sort_index()
         if not df.index.is_unique:
             df = df[~df.index.duplicated(keep="last")]
+
+        # ----------------------------
+        # NEW: ensure strong engineered features exist
+        # ----------------------------
+        if auto_add_core_features:
+            df_feat = self._add_plot_features_from_binance_ohlcv(df.copy())
+            # keep any original columns not present (defensive)
+            for c in df.columns:
+                if c not in df_feat.columns:
+                    df_feat[c] = df[c]
+            df = df_feat.replace([np.inf, -np.inf], np.nan).dropna()
 
         # ----------------------------
         # Feature columns
@@ -1213,13 +1294,13 @@ class ML_Strategies:
         test_scaled  = scaler.transform(test_df[feature_cols].astype(float))
 
         train_df_scaled = pd.DataFrame(train_scaled, index=train_df.index, columns=feature_cols)
-        test_df_scaled  = pd.DataFrame(test_scaled, index=test_df.index,  columns=feature_cols)
+        test_df_scaled  = pd.DataFrame(test_scaled,  index=test_df.index,  columns=feature_cols)
 
         # ----------------------------
-        # Fixed time_step/batch_size (matches your logs: time_step=64, batch_size=64)
+        # Fixed time_step/batch_size
         # ----------------------------
-        TIME_STEP_FIXED = 64
-        BATCH_FIXED = 64
+        TIME_STEP_FIXED = int(fixed_time_step)
+        BATCH_FIXED = int(fixed_batch_size)
 
         # ----------------------------
         # Supervised sequences
@@ -1232,13 +1313,11 @@ class ML_Strategies:
             ts_index = scaled_df.index
             close_series = df.loc[ts_index, "Close"].astype(float)  # use original close for targets
 
-            # We need i-time_step+1 >=0 and i+f_steps < len
             for i in range(time_step, len(scaled_df) - f_steps):
                 x = scaled_df.iloc[i - time_step:i][feature_cols].values.astype(np.float32)
 
                 c0 = float(close_series.iloc[i])
                 future = close_series.iloc[i + 1:i + 1 + f_steps].values.astype(float)
-                # forward log-returns relative to anchor close
                 y_path = np.log(future / c0).astype(np.float32)
 
                 X.append(x)
@@ -1246,6 +1325,19 @@ class ML_Strategies:
                 idx.append(ts_index[i])
 
             return np.asarray(X, dtype=np.float32), np.asarray(Y, dtype=np.float32), pd.Index(idx)
+
+        # ----------------------------
+        # NEW: horizon-weighted loss
+        # ----------------------------
+        def make_weighted_mse(f_steps: int, decay: float):
+            w = np.exp(-decay * np.arange(int(f_steps), dtype=np.float32))
+            w = w / np.mean(w)
+            w_tf = tf.constant(w, dtype=tf.float32)
+
+            def loss(y_true, y_pred):
+                err2 = tf.square(y_true - y_pred)
+                return tf.reduce_mean(err2 * w_tf)
+            return loss
 
         # ----------------------------
         # Transformer builder
@@ -1282,10 +1374,15 @@ class ML_Strategies:
             outputs = Dense(f_steps)(x)
 
             model = Model(inputs, outputs)
+
+            loss_fn = "mse"
+            if use_horizon_weighted_loss:
+                loss_fn = make_weighted_mse(f_steps=int(f_steps), decay=float(loss_decay))
+
             model.compile(
                 optimizer=tf.keras.optimizers.Adam(learning_rate=lr_),
-                loss="mse",
-                jit_compile=False,  # IMPORTANT: prevents XLA compilation surprises
+                loss=loss_fn,
+                jit_compile=False,
             )
             return model
 
@@ -1330,78 +1427,103 @@ class ML_Strategies:
                 X_all, Y_all, _ = create_supervised_sequences(
                     train_scaled_df, feature_cols, time_step=time_step, f_steps=int(future_steps)
                 )
-                if len(X_all) < int(wfv_min_samples):
-                    return float("-inf")
 
-                H = int(eval_h)
-                if H < 1 or H > int(future_steps):
-                    raise ValueError("eval_h must be in [1, future_steps].")
+                try:
+                    n_seq = int(len(X_all))
+                    if n_seq < int(wfv_min_samples):
+                        return float("-inf")
 
-                dir_accs = []
+                    H = int(eval_h)
+                    if H < 1 or H > int(future_steps):
+                        return float("-inf")
 
-                # Walk-forward windows on X_all
-                for start in range(0, len(X_all) - window_size - wfv_test_slice, step_size):
-                    end_train = start + window_size
-                    end_test  = end_train + wfv_test_slice
+                    # clamp window/step to feasible range (prevents empty loops)
+                    max_window = n_seq - max(1, int(wfv_test_slice)) - 1
+                    if max_window < max(100, int(wfv_min_samples)):
+                        return float("-inf")
 
-                    X_window = X_all[start:end_train]
-                    Y_window = Y_all[start:end_train]
-                    X_test_w = X_all[end_train:end_test]
-                    y_test_w = Y_all[end_train:end_test]
+                    effective_window = int(min(max_window, int(window_size)))
+                    effective_step = int(min(max(1, int(step_size)), effective_window))
+                    max_idx = n_seq - effective_window
+                    if max_idx <= 0:
+                        return float("-inf")
 
-                    if len(X_window) < int(wfv_min_samples) or len(X_test_w) < 1:
-                        continue
+                    dir_accs = []
 
-                    # split window into train/val
-                    n_w = len(X_window)
-                    split_w = int(n_w * (1.0 - float(wfv_val_split)))
-                    split_w = max(1, min(split_w, n_w - 1))
+                    for start in range(0, max_idx, effective_step):
+                        end_train = start + effective_window
+                        end_test = end_train + int(wfv_test_slice)
+                        if end_test > n_seq:
+                            break
 
-                    X_train_w, y_train_w = X_window[:split_w], Y_window[:split_w]
-                    X_val_w,   y_val_w   = X_window[split_w:], Y_window[split_w:]
+                        X_window = X_all[start:end_train]
+                        Y_window = Y_all[start:end_train]
+                        X_test_w = X_all[end_train:end_test]
+                        y_test_w = Y_all[end_train:end_test]
 
-                    tf.keras.backend.clear_session()
+                        if len(X_window) < int(wfv_min_samples) or len(X_test_w) < 1:
+                            continue
 
-                    model = build_transformer(
-                        time_step, int(len(feature_cols)), int(future_steps),
-                        head_size, num_heads, ff_dim, dense_units, float(dropout), float(lr_)
-                    )
+                        # split window into train/val
+                        n_w = len(X_window)
+                        split_w = int(n_w * (1.0 - float(wfv_val_split)))
+                        split_w = max(1, min(split_w, n_w - 1))
 
-                    # Fit (use val if present)
-                    if len(X_val_w) > 0:
-                        es = EarlyStopping(monitor="val_loss", patience=int(wfv_patience), restore_best_weights=True)
-                        model.fit(
-                            X_train_w, y_train_w,
-                            validation_data=(X_val_w, y_val_w),
-                            epochs=int(wfv_max_epochs),
-                            batch_size=int(batch_size),
-                            verbose=0,
-                            callbacks=[es],
+                        X_train_w, y_train_w = X_window[:split_w], Y_window[:split_w]
+                        X_val_w,   y_val_w   = X_window[split_w:], Y_window[split_w:]
+
+                        tf.keras.backend.clear_session()
+
+                        model = build_transformer(
+                            time_step=time_step,
+                            n_features=int(len(feature_cols)),
+                            f_steps=int(future_steps),
+                            head_size=int(head_size),
+                            num_heads=int(num_heads),
+                            ff_dim=int(ff_dim),
+                            dense_units=int(dense_units),
+                            dropout=float(dropout),
+                            lr_=float(lr_),
                         )
-                    else:
-                        es = EarlyStopping(monitor="loss", patience=2, restore_best_weights=True)
-                        model.fit(
-                            X_train_w, y_train_w,
-                            epochs=min(8, int(wfv_max_epochs)),
-                            batch_size=int(batch_size),
-                            verbose=0,
-                            callbacks=[es],
-                        )
 
-                    pred = model.predict(X_test_w, batch_size=int(batch_size), verbose=0)
-                    y_true_H = y_test_w[:, H - 1]
-                    y_pred_H = pred[:, H - 1]
-                    dir_accs.append(float(np.mean(np.sign(y_true_H) == np.sign(y_pred_H))))
+                        if len(X_val_w) > 0:
+                            es = EarlyStopping(monitor="val_loss", patience=int(wfv_patience), restore_best_weights=True)
+                            model.fit(
+                                X_train_w, y_train_w,
+                                validation_data=(X_val_w, y_val_w),
+                                epochs=int(wfv_max_epochs),
+                                batch_size=int(batch_size),
+                                verbose=0,
+                                callbacks=[es],
+                            )
+                        else:
+                            es = EarlyStopping(monitor="loss", patience=2, restore_best_weights=True)
+                            model.fit(
+                                X_train_w, y_train_w,
+                                epochs=min(8, int(wfv_max_epochs)),
+                                batch_size=int(batch_size),
+                                verbose=0,
+                                callbacks=[es],
+                            )
 
-                    # cleanup per window
-                    del model, X_window, Y_window, X_test_w, y_test_w, pred, y_true_H, y_pred_H
+                        pred = model.predict(X_test_w, batch_size=int(batch_size), verbose=0)
+                        y_true_H = y_test_w[:, H - 1]
+                        y_pred_H = pred[:, H - 1]
+                        dir_accs.append(float(np.mean(np.sign(y_true_H) == np.sign(y_pred_H))))
+
+                        del model, X_window, Y_window, X_test_w, y_test_w, pred
+                        tf.keras.backend.clear_session()
+                        gc.collect()
+
+                    if not dir_accs:
+                        return float("-inf")
+
+                    return float(np.median(dir_accs))
+
+                finally:
+                    del X_all, Y_all
                     tf.keras.backend.clear_session()
                     gc.collect()
-
-                if not dir_accs:
-                    return float("-inf")
-
-                return float(np.median(dir_accs))
 
             return objective
 
@@ -1467,8 +1589,15 @@ class ML_Strategies:
             raise ValueError("Not enough training rows to form sequences (reduce time_step/future_steps).")
 
         model = build_transformer(
-            ts, int(len(feature_cols)), int(future_steps),
-            head_size, num_heads, ff_dim, dense_units, dropout, lr_
+            time_step=ts,
+            n_features=int(len(feature_cols)),
+            f_steps=int(future_steps),
+            head_size=head_size,
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            dense_units=dense_units,
+            dropout=dropout,
+            lr_=lr_,
         )
 
         n = int(len(X_train_all))
@@ -1500,6 +1629,8 @@ class ML_Strategies:
             test_mae  = float(mean_absolute_error(Y_test_all.reshape(-1), Y_test_pred.reshape(-1)))
 
             H = int(eval_h)
+            H = max(1, min(H, int(future_steps)))
+
             y_true_H = Y_test_all[:, H - 1]
             y_pred_H = Y_test_pred[:, H - 1]
             dir_acc = float(np.mean(np.sign(y_true_H) == np.sign(y_pred_H)))
@@ -1525,23 +1656,20 @@ class ML_Strategies:
             raise ValueError("Could not form anchor sequence (reduce time_step or add more history).")
 
         last_input = X_anchor[-1].reshape(1, ts, len(feature_cols))
-        pred_future_ret = model.predict(last_input, batch_size=1, verbose=0)[0]
+        pred_future_logret = model.predict(last_input, batch_size=1, verbose=0)[0]
 
         anchor_price = float(df.loc[anchor_ts, "Close"])
-        forecast_prices = anchor_price * np.exp(pred_future_ret)
+        forecast_prices = anchor_price * np.exp(pred_future_logret)
 
         future_ts = pd.date_range(anchor_ts, periods=int(future_steps) + 1, freq=pandas_freq)[1:]
 
         forecast_df = pd.DataFrame({
             "timestamp": future_ts,
-            "forecast_forward_logret": pred_future_ret,
+            "forecast_forward_logret": pred_future_logret,
             "forecast_price": forecast_prices
         })
 
-        out_csv = os.path.join(
-            output_dir,
-            f"{self.symbol}_transformer_forecast_{self.bar_length}_fs{int(future_steps)}.csv"
-        )
+        out_csv = os.path.join(output_dir, f"{self.symbol}_transformer_forecast_{self.bar_length}_fs{int(future_steps)}.csv")
         forecast_df.to_csv(out_csv, index=False)
         print(f"\n[{self.symbol}] Saved Transformer future forecast CSV: {out_csv}")
 
@@ -1561,10 +1689,7 @@ class ML_Strategies:
         plt.legend()
         plt.tight_layout()
 
-        out_png = os.path.join(
-            output_dir,
-            f"{self.symbol}_transformer_actual_plus_forecast_{self.bar_length}_fs{int(future_steps)}.png"
-        )
+        out_png = os.path.join(output_dir, f"{self.symbol}_transformer_actual_plus_forecast_{self.bar_length}_fs{int(future_steps)}.png")
         plt.savefig(out_png, dpi=200)
         plt.close()
         print(f"[{self.symbol}] Saved combined plot: {out_png}")
