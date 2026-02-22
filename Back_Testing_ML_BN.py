@@ -5,6 +5,14 @@ from Loading_Data_BN import fetch_historical_data
 import logging
 import warnings
 import os
+import gc
+import os
+import os
+os.environ["TF_XLA_FLAGS"] = "--tf_xla_auto_jit=0"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # optional: reduce TF logs
+
+import tensorflow as tf
+tf.config.optimizer.set_jit(False)
 
 plots_folder = "Plots"
 os.makedirs(plots_folder, exist_ok=True)
@@ -457,7 +465,6 @@ class ML_Strategies:
     # ============================================================
     # ============================================================
 
-
     # ============================================================
     # TF GPU helper (shared)
     # ============================================================
@@ -465,19 +472,23 @@ class ML_Strategies:
         import tensorflow as tf
 
         gpus = tf.config.list_physical_devices("GPU")
-        if gpus:
-            try:
-                if tf_memory_growth:
-                    for gpu in gpus:
-                        tf.config.experimental.set_memory_growth(gpu, True)
-                if tf_mixed_precision:
-                    from tensorflow.keras import mixed_precision as mp
-                    mp.set_global_policy("mixed_float16")
-                print(f"[TF] GPUs detected: {gpus}")
-            except Exception as e:
-                print(f"[TF] GPU setup warning: {e}")
-        else:
+        if not gpus:
             print("[TF] No GPU detected. Running on CPU.")
+            return
+
+        try:
+            if tf_memory_growth:
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+
+            if tf_mixed_precision:
+                from tensorflow.keras import mixed_precision as mp
+                mp.set_global_policy("mixed_float16")
+
+            print(f"[TF] GPUs detected: {gpus}")
+
+        except Exception as e:
+            print(f"[TF] GPU setup warning: {e}")
 
 
     # ============================================================
@@ -492,15 +503,15 @@ class ML_Strategies:
         train_end: str = None,
         test_end: str = None,
 
-        # Optuna / WFV
-        n_trials: int = 30,
+        # Optuna / WFV (safer defaults for WSL/laptop)
+        n_trials: int = 15,
         skip_tuning_if_best_exists: bool = False,
-        window_size: int = 3000,
+        window_size: int = 1500,
         step_size: int = 750,
-        wfv_test_slice: int = 50,
+        wfv_test_slice: int = 25,
         wfv_val_split: float = 0.2,
         wfv_min_samples: int = 300,
-        wfv_max_epochs: int = 8,
+        wfv_max_epochs: int = 4,
         wfv_patience: int = 2,
 
         # Final training
@@ -515,6 +526,10 @@ class ML_Strategies:
         tf_memory_growth: bool = True,
         tf_mixed_precision: bool = False,
         enable_eager_debug: bool = False,
+
+        # stability knobs
+        fixed_time_step: int = 64,
+        fixed_batch_size: int = 64,
     ):
         """
         Conv1D future prediction for Binance data.
@@ -522,14 +537,20 @@ class ML_Strategies:
         Exports: forecast CSV + history+forecast plot + EMA actual-vs-pred plot.
         """
 
-        import os, json
+        import os, json, gc
         import numpy as np
         import pandas as pd
         import matplotlib.pyplot as plt
 
         import optuna
         import tensorflow as tf
-        from tensorflow.keras.layers import Input, Conv1D, MaxPooling1D, GlobalAveragePooling1D, Dense, Dropout
+
+        # --- hard disable XLA/JIT (avoid slow compile + RAM spikes) ---
+        tf.config.optimizer.set_jit(False)
+
+        from tensorflow.keras.layers import (
+            Input, Conv1D, MaxPooling1D, GlobalAveragePooling1D, Dense, Dropout
+        )
         from tensorflow.keras.models import Model
         from tensorflow.keras.callbacks import EarlyStopping
 
@@ -538,6 +559,7 @@ class ML_Strategies:
 
         from Future_analysis_plots import plot_price_with_ema
 
+        # GPU setup (memory growth / mixed precision)
         self._tf_setup_gpu(tf_memory_growth=tf_memory_growth, tf_mixed_precision=tf_mixed_precision)
 
         if enable_eager_debug:
@@ -545,6 +567,10 @@ class ML_Strategies:
             tf.data.experimental.enable_debug_mode()
 
         os.makedirs(output_dir, exist_ok=True)
+
+        # Fixed to avoid shape churn/retracing and improve stability
+        TIME_STEP_FIXED = int(fixed_time_step)
+        BATCH_FIXED = int(fixed_batch_size)
 
         # ----------------------------
         # Binance bar_length -> pandas freq
@@ -641,24 +667,28 @@ class ML_Strategies:
                     pd.Index([]),
                 )
 
-            X, Y, idx = [], [], []
+            X = np.empty((last_i - time_step + 1, time_step, len(cols)), dtype=np.float32)
+            Y = np.empty((last_i - time_step + 1, f_steps), dtype=np.float32)
+            idx = []
+
+            r = 0
             for i in range(time_step, last_i + 1):
-                X.append(feat_vals[i - time_step:i])
+                X[r] = feat_vals[i - time_step:i]
                 c0 = close_vals[i]
                 future = close_vals[i + 1:i + 1 + f_steps]
-                y_path = np.log(future / c0).astype(np.float32)
-                Y.append(y_path)
+                Y[r] = np.log(future / c0).astype(np.float32)
                 idx.append(ts_index[i])
+                r += 1
 
-            return np.asarray(X, dtype=np.float32), np.asarray(Y, dtype=np.float32), pd.Index(idx)
+            return X, Y, pd.Index(idx)
 
         # ----------------------------
         # Conv1D builder
         # ----------------------------
-        def build_conv1d(time_step: int, n_features: int, f_steps: int, filters: int, kernel: int,
-                        dense_units: int, dropout: float, lr_: float):
+        def build_conv1d(time_step: int, n_features: int, f_steps: int,
+                        filters: int, kernel: int, dense_units: int,
+                        dropout: float, lr_: float):
             inputs = Input(shape=(time_step, n_features))
-
             x = Conv1D(filters, kernel, padding="causal", activation="relu")(inputs)
             x = Conv1D(filters, kernel, padding="causal", activation="relu")(x)
             x = MaxPooling1D(2)(x)
@@ -672,7 +702,11 @@ class ML_Strategies:
             outputs = Dense(f_steps)(x)
 
             model = Model(inputs, outputs)
-            model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr_), loss="mse")
+            model.compile(
+                optimizer=tf.keras.optimizers.Adam(learning_rate=lr_),
+                loss="mse",
+                jit_compile=False,  # make sure we don’t trigger XLA
+            )
             return model
 
         # ----------------------------
@@ -699,102 +733,122 @@ class ML_Strategies:
         # Optuna objective (WFV) - maximize median direction accuracy at eval_h
         # ----------------------------
         def make_objective(train_scaled_df: pd.DataFrame):
+            # Prebuild sequences ONCE per trial (still heavy, but we explicitly delete them)
             def objective(trial):
                 tf.keras.utils.set_random_seed(global_seed + int(trial.number))
                 np.random.seed(global_seed + int(trial.number))
 
-                time_step   = trial.suggest_int("time_step", 40, 90)
-                filters     = trial.suggest_categorical("filters", [32, 64, 96])
-                kernel      = trial.suggest_categorical("kernel", [3, 5])
-                dense_units = trial.suggest_categorical("dense_units", [32, 64, 96, 128])
-                dropout     = trial.suggest_float("dropout", 0.05, 0.30)
-                lr_         = trial.suggest_float("lr", 3e-4, 2e-3, log=True)
-                batch_size  = trial.suggest_categorical("batch_size", [64, 128, 256])
+                time_step = TIME_STEP_FIXED
+                batch_size = BATCH_FIXED
+
+                filters = trial.suggest_categorical("filters", [16, 32, 64])
+                kernel = trial.suggest_categorical("kernel", [3, 5])
+                dense_units = trial.suggest_categorical("dense_units", [32, 64, 96])
+                dropout = trial.suggest_float("dropout", 0.05, 0.30)
+                lr_ = trial.suggest_float("lr", 3e-4, 2e-3, log=True)
 
                 X_all, Y_all, _ = create_supervised_sequences(
-                    train_scaled_df, feature_cols, time_step=int(time_step), f_steps=int(future_steps)
+                    train_scaled_df, feature_cols, time_step=time_step, f_steps=int(future_steps)
                 )
-                n_seq = int(len(X_all))
-                if n_seq < 500:
-                    return float("-inf")
 
-                H = int(eval_h)
-                if H < 1 or H > int(future_steps):
-                    return float("-inf")
+                try:
+                    n_seq = int(len(X_all))
+                    if n_seq < 500:
+                        return float("-inf")
 
-                # clamp window/step
-                max_window = n_seq - max(1, int(wfv_test_slice)) - 1
-                if max_window < max(100, int(wfv_min_samples)):
-                    return float("-inf")
+                    H = int(eval_h)
+                    if H < 1 or H > int(future_steps):
+                        return float("-inf")
 
-                effective_window = int(min(max_window, int(window_size)))
-                effective_step = int(min(max(1, int(step_size)), effective_window))
+                    # clamp window/step
+                    max_window = n_seq - max(1, int(wfv_test_slice)) - 1
+                    if max_window < max(100, int(wfv_min_samples)):
+                        return float("-inf")
 
-                max_idx = n_seq - effective_window
-                if max_idx <= 0:
-                    return float("-inf")
+                    effective_window = int(min(max_window, int(window_size)))
+                    effective_step = int(min(max(1, int(step_size)), effective_window))
+                    max_idx = n_seq - effective_window
+                    if max_idx <= 0:
+                        return float("-inf")
 
-                dir_accs = []
+                    dir_accs = []
 
-                for start_idx in range(0, max_idx, effective_step):
-                    end_idx = start_idx + effective_window
-                    if end_idx + int(wfv_test_slice) > n_seq:
-                        break
+                    for start_idx in range(0, max_idx, effective_step):
+                        end_idx = start_idx + effective_window
+                        if end_idx + int(wfv_test_slice) > n_seq:
+                            break
 
-                    X_train_w = X_all[start_idx:end_idx]
-                    y_train_w = Y_all[start_idx:end_idx]
-                    X_test_w  = X_all[end_idx:end_idx + int(wfv_test_slice)]
-                    y_test_w  = Y_all[end_idx:end_idx + int(wfv_test_slice)]
-                    if len(X_test_w) == 0:
-                        break
+                        X_train_w = X_all[start_idx:end_idx]
+                        y_train_w = Y_all[start_idx:end_idx]
+                        X_test_w = X_all[end_idx:end_idx + int(wfv_test_slice)]
+                        y_test_w = Y_all[end_idx:end_idx + int(wfv_test_slice)]
+                        if len(X_test_w) == 0:
+                            break
 
+                        tf.keras.backend.clear_session()
+                        model = build_conv1d(
+                            time_step=time_step,
+                            n_features=int(len(feature_cols)),
+                            f_steps=int(future_steps),
+                            filters=int(filters),
+                            kernel=int(kernel),
+                            dense_units=int(dense_units),
+                            dropout=float(dropout),
+                            lr_=float(lr_),
+                        )
+
+                        n = int(len(X_train_w))
+                        if n >= int(wfv_min_samples):
+                            split = int(n * (1.0 - float(wfv_val_split)))
+                            split = max(1, min(split, n - 1))
+                            X_tr, y_tr = X_train_w[:split], y_train_w[:split]
+                            X_val, y_val = X_train_w[split:], y_train_w[split:]
+
+                            es = EarlyStopping(
+                                monitor="val_loss",
+                                patience=int(wfv_patience),
+                                restore_best_weights=True
+                            )
+                            model.fit(
+                                X_tr, y_tr,
+                                validation_data=(X_val, y_val),
+                                epochs=int(wfv_max_epochs),
+                                batch_size=batch_size,
+                                verbose=0,
+                                callbacks=[es],
+                            )
+                        else:
+                            es = EarlyStopping(monitor="loss", patience=2, restore_best_weights=True)
+                            model.fit(
+                                X_train_w, y_train_w,
+                                epochs=min(8, int(wfv_max_epochs)),
+                                batch_size=batch_size,
+                                verbose=0,
+                                callbacks=[es],
+                            )
+
+                        # IMPORTANT: no @tf.function inside loop
+                        pred = model.predict(X_test_w, batch_size=batch_size, verbose=0)
+
+                        y_true_H = y_test_w[:, H - 1]
+                        y_pred_H = pred[:, H - 1]
+                        dir_accs.append(float(np.mean(np.sign(y_true_H) == np.sign(y_pred_H))))
+
+                        # window cleanup
+                        del model, pred, X_train_w, y_train_w, X_test_w, y_test_w
+                        tf.keras.backend.clear_session()
+                        gc.collect()
+
+                    if not dir_accs:
+                        return float("-inf")
+
+                    return float(np.median(dir_accs))
+
+                finally:
+                    # trial cleanup: free the big arrays
+                    del X_all, Y_all
                     tf.keras.backend.clear_session()
-                    model = build_conv1d(
-                        time_step=int(time_step),
-                        n_features=int(len(feature_cols)),
-                        f_steps=int(future_steps),
-                        filters=int(filters),
-                        kernel=int(kernel),
-                        dense_units=int(dense_units),
-                        dropout=float(dropout),
-                        lr_=float(lr_),
-                    )
-
-                    n = int(len(X_train_w))
-                    if n >= int(wfv_min_samples):
-                        split = int(n * (1.0 - float(wfv_val_split)))
-                        split = max(1, min(split, n - 1))
-                        X_tr, y_tr = X_train_w[:split], y_train_w[:split]
-                        X_val, y_val = X_train_w[split:], y_train_w[split:]
-
-                        es = EarlyStopping(monitor="val_loss", patience=int(wfv_patience), restore_best_weights=True)
-                        model.fit(
-                            X_tr, y_tr,
-                            validation_data=(X_val, y_val),
-                            epochs=int(wfv_max_epochs),
-                            batch_size=int(batch_size),
-                            verbose=0,
-                            callbacks=[es],
-                        )
-                    else:
-                        es = EarlyStopping(monitor="loss", patience=2, restore_best_weights=True)
-                        model.fit(
-                            X_train_w, y_train_w,
-                            epochs=min(8, int(wfv_max_epochs)),
-                            batch_size=int(batch_size),
-                            verbose=0,
-                            callbacks=[es],
-                        )
-
-                    pred = model.predict(X_test_w, batch_size=int(batch_size), verbose=0)
-                    y_true_H = y_test_w[:, H - 1]
-                    y_pred_H = pred[:, H - 1]
-                    dir_accs.append(float(np.mean(np.sign(y_true_H) == np.sign(y_pred_H))))
-
-                if not dir_accs:
-                    return float("-inf")
-
-                return float(np.median(dir_accs))
+                    gc.collect()
 
             return objective
 
@@ -812,6 +866,8 @@ class ML_Strategies:
             study.optimize(make_objective(train_df_scaled), n_trials=int(n_trials))
 
             best_params = study.best_params
+            best_params["time_step"] = int(TIME_STEP_FIXED)
+            best_params["batch_size"] = int(BATCH_FIXED)
             best_score = float(study.best_value)
 
             payload = {
@@ -828,7 +884,15 @@ class ML_Strategies:
             print(f"\n[{self.symbol}] Conv1D Best WFV DirAcc (median, H={eval_h}) = {best_score:.4f}")
             print(f"[{self.symbol}] Conv1D Best params:", best_params)
 
-        # unpack best
+        # Backward compatibility (older cache)
+        if "time_step" not in best_params:
+            best_params["time_step"] = int(TIME_STEP_FIXED)
+        if "batch_size" not in best_params:
+            best_params["batch_size"] = int(BATCH_FIXED)
+
+        # ----------------------------
+        # Unpack best
+        # ----------------------------
         ts = int(best_params["time_step"])
         bs = int(best_params["batch_size"])
         f_ = int(best_params["filters"])
@@ -844,7 +908,9 @@ class ML_Strategies:
         np.random.seed(int(global_seed))
         tf.keras.backend.clear_session()
 
-        X_train_all, Y_train_all, _ = create_supervised_sequences(train_df_scaled, feature_cols, time_step=ts, f_steps=int(future_steps))
+        X_train_all, Y_train_all, _ = create_supervised_sequences(
+            train_df_scaled, feature_cols, time_step=ts, f_steps=int(future_steps)
+        )
         if len(X_train_all) == 0:
             raise ValueError("Not enough training rows to form sequences (reduce time_step/future_steps).")
 
@@ -869,12 +935,14 @@ class ML_Strategies:
         # ----------------------------
         # Eval on test
         # ----------------------------
-        X_test_all, Y_test_all, _ = create_supervised_sequences(test_df_scaled, feature_cols, time_step=ts, f_steps=int(future_steps))
+        X_test_all, Y_test_all, _ = create_supervised_sequences(
+            test_df_scaled, feature_cols, time_step=ts, f_steps=int(future_steps)
+        )
         if len(X_test_all) > 0:
             Y_test_pred = model.predict(X_test_all, batch_size=int(bs), verbose=0)
 
             test_rmse = float(np.sqrt(mean_squared_error(Y_test_all.reshape(-1), Y_test_pred.reshape(-1))))
-            test_mae  = float(mean_absolute_error(Y_test_all.reshape(-1), Y_test_pred.reshape(-1)))
+            test_mae = float(mean_absolute_error(Y_test_all.reshape(-1), Y_test_pred.reshape(-1)))
 
             H = int(eval_h)
             y_true_H = Y_test_all[:, H - 1]
@@ -974,8 +1042,12 @@ class ML_Strategies:
             last_days=5,
         )
 
-        return forecast_df
+        # Final cleanup (helps before you start Transformer in same run)
+        del X_train_all, Y_train_all, X_test_all, Y_test_all
+        tf.keras.backend.clear_session()
+        gc.collect()
 
+        return forecast_df
 
     # ============================================================
     # Transformer | Optuna + WFV | Direction objective
@@ -1015,17 +1087,32 @@ class ML_Strategies:
         enable_eager_debug: bool = False,
     ):
         """
-        Transformer future prediction for Binance data using Optuna WFV objective:
+        Transformer future prediction for Binance data using Optuna WFV objective.
         Objective: MAXIMIZE median direction accuracy at horizon eval_h.
+
+        Exports:
+        - forecast CSV
+        - history+forecast plot
+        - EMA actual-vs-pred plot (1-step reconstruction)
+
+        Notes:
+        - We avoid defining @tf.function inside loops (prevents retracing)
+        - We force jit_compile=False on model.compile (reduces XLA surprises)
+        - We aggressively delete large arrays inside trials to avoid WSL OOM ("Killed")
         """
 
-        import os, json
+        import os, json, gc
         import numpy as np
         import pandas as pd
         import matplotlib.pyplot as plt
-
         import optuna
+
+        # IMPORTANT: For full effect, set this before TF is imported anywhere in the process.
+        os.environ.setdefault("TF_XLA_FLAGS", "--tf_xla_auto_jit=0")
+
         import tensorflow as tf
+        tf.config.optimizer.set_jit(False)
+
         from tensorflow.keras.layers import (
             Input, Dense, Dropout, LayerNormalization,
             MultiHeadAttention, GlobalAveragePooling1D
@@ -1038,6 +1125,7 @@ class ML_Strategies:
 
         from Future_analysis_plots import plot_price_with_ema
 
+        # GPU setup
         self._tf_setup_gpu(tf_memory_growth=tf_memory_growth, tf_mixed_precision=tf_mixed_precision)
 
         if enable_eager_debug:
@@ -1046,6 +1134,13 @@ class ML_Strategies:
 
         os.makedirs(output_dir, exist_ok=True)
 
+        # Fixed to reduce retracing / compilation churn
+        TIME_STEP_FIXED = 64
+        BATCH_FIXED = 64
+
+        # ----------------------------
+        # Binance bar_length -> pandas freq
+        # ----------------------------
         def _bar_length_to_pandas_freq(bar_length: str) -> str:
             bl = str(bar_length).strip()
             if bl.endswith("m") and bl[:-1].isdigit():
@@ -1062,7 +1157,9 @@ class ML_Strategies:
 
         pandas_freq = _bar_length_to_pandas_freq(self.bar_length)
 
-        # validate
+        # ----------------------------
+        # Validate / clean data
+        # ----------------------------
         if self.data is None or len(self.data) < 500:
             raise ValueError("self.data is empty/too small. Ensure Binance API data was loaded first.")
 
@@ -1078,7 +1175,9 @@ class ML_Strategies:
         if not df.index.is_unique:
             df = df[~df.index.duplicated(keep="last")]
 
-        # features
+        # ----------------------------
+        # Feature columns
+        # ----------------------------
         if feature_cols is None:
             drop_cols = {"Open", "High", "Low", "Close", "Volume", "ml_target", "prediction"}
             if forbid_leakage_cols:
@@ -1088,7 +1187,9 @@ class ML_Strategies:
         if not feature_cols:
             raise ValueError("feature_cols is empty. Run ML_Strategy() first or pass feature_cols explicitly.")
 
-        # split
+        # ----------------------------
+        # Split
+        # ----------------------------
         if use_date_split:
             if train_end is None or test_end is None:
                 raise ValueError("use_date_split=True requires train_end and test_end.")
@@ -1104,7 +1205,9 @@ class ML_Strategies:
         if len(train_df) < 1000:
             raise ValueError("Not enough training bars after cleaning/splitting.")
 
-        # scale train-only
+        # ----------------------------
+        # Scale features (train-only)
+        # ----------------------------
         feat_scaler = MinMaxScaler()
         train_feat_scaled = feat_scaler.fit_transform(train_df[feature_cols].values)
         test_feat_scaled = feat_scaler.transform(test_df[feature_cols].values)
@@ -1114,7 +1217,9 @@ class ML_Strategies:
         train_df_scaled["close"] = train_df["Close"].astype(float).values
         test_df_scaled["close"] = test_df["Close"].astype(float).values
 
-        # sequences
+        # ----------------------------
+        # Sequences
+        # ----------------------------
         def create_supervised_sequences(local_df: pd.DataFrame, cols: list, time_step: int, f_steps: int):
             feat_vals = local_df[cols].to_numpy(dtype=np.float32, copy=False)
             close_vals = local_df["close"].to_numpy(dtype=np.float64, copy=False)
@@ -1140,11 +1245,20 @@ class ML_Strategies:
 
             return np.asarray(X, dtype=np.float32), np.asarray(Y, dtype=np.float32), pd.Index(idx)
 
-        # transformer builder
-        def build_transformer(time_step: int, n_features: int, f_steps: int,
-                            head_size: int, num_heads: int, ff_dim: int,
-                            dense_units: int, dropout: float, lr_: float):
-
+        # ----------------------------
+        # Transformer builder
+        # ----------------------------
+        def build_transformer(
+            time_step: int,
+            n_features: int,
+            f_steps: int,
+            head_size: int,
+            num_heads: int,
+            ff_dim: int,
+            dense_units: int,
+            dropout: float,
+            lr_: float,
+        ):
             def transformer_encoder(inputs):
                 x = LayerNormalization(epsilon=1e-6)(inputs)
                 x = MultiHeadAttention(key_dim=head_size, num_heads=num_heads, dropout=dropout)(x, x)
@@ -1166,10 +1280,16 @@ class ML_Strategies:
             outputs = Dense(f_steps)(x)
 
             model = Model(inputs, outputs)
-            model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr_), loss="mse")
+            model.compile(
+                optimizer=tf.keras.optimizers.Adam(learning_rate=lr_),
+                loss="mse",
+                jit_compile=False,  # IMPORTANT: prevents XLA compilation surprises
+            )
             return model
 
-        # cache
+        # ----------------------------
+        # Cache (include eval_h because objective depends on it)
+        # ----------------------------
         def best_params_path() -> str:
             fname = f"{self.symbol}_transformer_best_params_{self.bar_length}_fs{int(future_steps)}_H{int(eval_h)}.json"
             return os.path.join(output_dir, fname)
@@ -1187,108 +1307,128 @@ class ML_Strategies:
                 json.dump(payload, f, indent=2)
             return p
 
-        # objective (maximize dir-acc at eval_h)
+        # ----------------------------
+        # Optuna objective (WFV) - maximize median direction accuracy at eval_h
+        # ----------------------------
         def make_objective(train_scaled_df: pd.DataFrame):
             def objective(trial):
                 tf.keras.utils.set_random_seed(global_seed + int(trial.number))
                 np.random.seed(global_seed + int(trial.number))
 
-                time_step   = trial.suggest_int("time_step", 40, 100, step=5)
-                head_size   = trial.suggest_categorical("head_size", [32, 64, 128])
-                num_heads   = trial.suggest_categorical("num_heads", [2, 4, 8])
-                ff_dim      = trial.suggest_categorical("ff_dim", [64, 128, 256])
-                dense_units = trial.suggest_categorical("dense_units", [32, 64, 96, 128])
-                dropout     = trial.suggest_float("dropout", 0.05, 0.30)
-                lr_         = trial.suggest_float("lr", 3e-4, 2e-3, log=True)
-                batch_size  = trial.suggest_categorical("batch_size", [64, 128, 256])
+                time_step = int(TIME_STEP_FIXED)
+                batch_size = int(BATCH_FIXED)
+
+                head_size = trial.suggest_categorical("head_size", [32, 64])
+                num_heads = trial.suggest_categorical("num_heads", [2, 4])
+                ff_dim = trial.suggest_categorical("ff_dim", [64, 128])
+                dense_units = trial.suggest_categorical("dense_units", [32, 64, 96])
+                dropout = trial.suggest_float("dropout", 0.05, 0.30)
+                lr_ = trial.suggest_float("lr", 3e-4, 2e-3, log=True)
 
                 X_all, Y_all, _ = create_supervised_sequences(
-                    train_scaled_df, feature_cols, time_step=int(time_step), f_steps=int(future_steps)
+                    train_scaled_df, feature_cols, time_step=time_step, f_steps=int(future_steps)
                 )
-                n_seq = int(len(X_all))
-                if n_seq < 500:
-                    return float("-inf")
 
-                H = int(eval_h)
-                if H < 1 or H > int(future_steps):
-                    return float("-inf")
+                try:
+                    n_seq = int(len(X_all))
+                    if n_seq < 500:
+                        return float("-inf")
 
-                max_window = n_seq - max(1, int(wfv_test_slice)) - 1
-                if max_window < max(100, int(wfv_min_samples)):
-                    return float("-inf")
+                    H = int(eval_h)
+                    if H < 1 or H > int(future_steps):
+                        return float("-inf")
 
-                effective_window = int(min(max_window, int(window_size)))
-                effective_step = int(min(max(1, int(step_size)), effective_window))
-                max_idx = n_seq - effective_window
-                if max_idx <= 0:
-                    return float("-inf")
+                    max_window = n_seq - max(1, int(wfv_test_slice)) - 1
+                    if max_window < max(100, int(wfv_min_samples)):
+                        return float("-inf")
 
-                dir_accs = []
+                    effective_window = int(min(max_window, int(window_size)))
+                    effective_step = int(min(max(1, int(step_size)), effective_window))
+                    max_idx = n_seq - effective_window
+                    if max_idx <= 0:
+                        return float("-inf")
 
-                for start_idx in range(0, max_idx, effective_step):
-                    end_idx = start_idx + effective_window
-                    if end_idx + int(wfv_test_slice) > n_seq:
-                        break
+                    dir_accs = []
 
-                    X_train_w = X_all[start_idx:end_idx]
-                    y_train_w = Y_all[start_idx:end_idx]
-                    X_test_w  = X_all[end_idx:end_idx + int(wfv_test_slice)]
-                    y_test_w  = Y_all[end_idx:end_idx + int(wfv_test_slice)]
-                    if len(X_test_w) == 0:
-                        break
+                    for start_idx in range(0, max_idx, effective_step):
+                        end_idx = start_idx + effective_window
+                        if end_idx + int(wfv_test_slice) > n_seq:
+                            break
 
+                        X_train_w = X_all[start_idx:end_idx]
+                        y_train_w = Y_all[start_idx:end_idx]
+                        X_test_w = X_all[end_idx:end_idx + int(wfv_test_slice)]
+                        y_test_w = Y_all[end_idx:end_idx + int(wfv_test_slice)]
+                        if len(X_test_w) == 0:
+                            break
+
+                        tf.keras.backend.clear_session()
+                        model = build_transformer(
+                            time_step=time_step,
+                            n_features=int(len(feature_cols)),
+                            f_steps=int(future_steps),
+                            head_size=int(head_size),
+                            num_heads=int(num_heads),
+                            ff_dim=int(ff_dim),
+                            dense_units=int(dense_units),
+                            dropout=float(dropout),
+                            lr_=float(lr_),
+                        )
+
+                        n = int(len(X_train_w))
+                        if n >= int(wfv_min_samples):
+                            split = int(n * (1.0 - float(wfv_val_split)))
+                            split = max(1, min(split, n - 1))
+                            X_tr, y_tr = X_train_w[:split], y_train_w[:split]
+                            X_val, y_val = X_train_w[split:], y_train_w[split:]
+
+                            es = EarlyStopping(monitor="val_loss", patience=int(wfv_patience), restore_best_weights=True)
+                            model.fit(
+                                X_tr, y_tr,
+                                validation_data=(X_val, y_val),
+                                epochs=int(wfv_max_epochs),
+                                batch_size=batch_size,
+                                verbose=0,
+                                callbacks=[es],
+                            )
+                        else:
+                            es = EarlyStopping(monitor="loss", patience=2, restore_best_weights=True)
+                            model.fit(
+                                X_train_w, y_train_w,
+                                epochs=min(8, int(wfv_max_epochs)),
+                                batch_size=batch_size,
+                                verbose=0,
+                                callbacks=[es],
+                            )
+
+                        # IMPORTANT: no tf.function inside loop (prevents retracing)
+                        pred = model.predict(X_test_w, batch_size=batch_size, verbose=0)
+
+                        y_true_H = y_test_w[:, H - 1]
+                        y_pred_H = pred[:, H - 1]
+                        dir_accs.append(float(np.mean(np.sign(y_true_H) == np.sign(y_pred_H))))
+
+                        # cleanup per window
+                        del model, pred, X_train_w, y_train_w, X_test_w, y_test_w
+                        tf.keras.backend.clear_session()
+                        gc.collect()
+
+                    if not dir_accs:
+                        return float("-inf")
+
+                    return float(np.median(dir_accs))
+
+                finally:
+                    # critical: free the big arrays per-trial
+                    del X_all, Y_all
                     tf.keras.backend.clear_session()
-                    model = build_transformer(
-                        time_step=int(time_step),
-                        n_features=int(len(feature_cols)),
-                        f_steps=int(future_steps),
-                        head_size=int(head_size),
-                        num_heads=int(num_heads),
-                        ff_dim=int(ff_dim),
-                        dense_units=int(dense_units),
-                        dropout=float(dropout),
-                        lr_=float(lr_),
-                    )
-
-                    n = int(len(X_train_w))
-                    if n >= int(wfv_min_samples):
-                        split = int(n * (1.0 - float(wfv_val_split)))
-                        split = max(1, min(split, n - 1))
-                        X_tr, y_tr = X_train_w[:split], y_train_w[:split]
-                        X_val, y_val = X_train_w[split:], y_train_w[split:]
-
-                        es = EarlyStopping(monitor="val_loss", patience=int(wfv_patience), restore_best_weights=True)
-                        model.fit(
-                            X_tr, y_tr,
-                            validation_data=(X_val, y_val),
-                            epochs=int(wfv_max_epochs),
-                            batch_size=int(batch_size),
-                            verbose=0,
-                            callbacks=[es],
-                        )
-                    else:
-                        es = EarlyStopping(monitor="loss", patience=2, restore_best_weights=True)
-                        model.fit(
-                            X_train_w, y_train_w,
-                            epochs=min(8, int(wfv_max_epochs)),
-                            batch_size=int(batch_size),
-                            verbose=0,
-                            callbacks=[es],
-                        )
-
-                    pred = model.predict(X_test_w, batch_size=int(batch_size), verbose=0)
-                    y_true_H = y_test_w[:, H - 1]
-                    y_pred_H = pred[:, H - 1]
-                    dir_accs.append(float(np.mean(np.sign(y_true_H) == np.sign(y_pred_H))))
-
-                if not dir_accs:
-                    return float("-inf")
-
-                return float(np.median(dir_accs))
+                    gc.collect()
 
             return objective
 
-        # tune/cache
+        # ----------------------------
+        # Tune or load cache
+        # ----------------------------
         cached = load_best_params() if skip_tuning_if_best_exists else None
         if cached is not None:
             best_params = cached["best_params"]
@@ -1300,6 +1440,8 @@ class ML_Strategies:
             study.optimize(make_objective(train_df_scaled), n_trials=int(n_trials))
 
             best_params = study.best_params
+            best_params["time_step"] = int(TIME_STEP_FIXED)
+            best_params["batch_size"] = int(BATCH_FIXED)
             best_score = float(study.best_value)
 
             payload = {
@@ -1316,7 +1458,13 @@ class ML_Strategies:
             print(f"\n[{self.symbol}] Transformer Best WFV DirAcc (median, H={eval_h}) = {best_score:.4f}")
             print(f"[{self.symbol}] Transformer Best params:", best_params)
 
-        # unpack
+        # cache compatibility
+        if "time_step" not in best_params:
+            best_params["time_step"] = int(TIME_STEP_FIXED)
+        if "batch_size" not in best_params:
+            best_params["batch_size"] = int(BATCH_FIXED)
+
+        # unpack best
         ts = int(best_params["time_step"])
         bs = int(best_params["batch_size"])
         head_size = int(best_params["head_size"])
@@ -1326,17 +1474,23 @@ class ML_Strategies:
         dropout = float(best_params["dropout"])
         lr_ = float(best_params["lr"])
 
-        # final train
+        # ----------------------------
+        # Final train
+        # ----------------------------
         tf.keras.utils.set_random_seed(int(global_seed))
         np.random.seed(int(global_seed))
         tf.keras.backend.clear_session()
 
-        X_train_all, Y_train_all, _ = create_supervised_sequences(train_df_scaled, feature_cols, time_step=ts, f_steps=int(future_steps))
+        X_train_all, Y_train_all, _ = create_supervised_sequences(
+            train_df_scaled, feature_cols, time_step=ts, f_steps=int(future_steps)
+        )
         if len(X_train_all) == 0:
             raise ValueError("Not enough training rows to form sequences (reduce time_step/future_steps).")
 
-        model = build_transformer(ts, int(len(feature_cols)), int(future_steps),
-                                head_size, num_heads, ff_dim, dense_units, dropout, lr_)
+        model = build_transformer(
+            ts, int(len(feature_cols)), int(future_steps),
+            head_size, num_heads, ff_dim, dense_units, dropout, lr_
+        )
 
         n = int(len(X_train_all))
         split = int(n * 0.8)
@@ -1354,13 +1508,17 @@ class ML_Strategies:
             callbacks=[es],
         )
 
-        # eval test
-        X_test_all, Y_test_all, _ = create_supervised_sequences(test_df_scaled, feature_cols, time_step=ts, f_steps=int(future_steps))
+        # ----------------------------
+        # Eval on test
+        # ----------------------------
+        X_test_all, Y_test_all, _ = create_supervised_sequences(
+            test_df_scaled, feature_cols, time_step=ts, f_steps=int(future_steps)
+        )
         if len(X_test_all) > 0:
             Y_test_pred = model.predict(X_test_all, batch_size=int(bs), verbose=0)
 
             test_rmse = float(np.sqrt(mean_squared_error(Y_test_all.reshape(-1), Y_test_pred.reshape(-1))))
-            test_mae  = float(mean_absolute_error(Y_test_all.reshape(-1), Y_test_pred.reshape(-1)))
+            test_mae = float(mean_absolute_error(Y_test_all.reshape(-1), Y_test_pred.reshape(-1)))
 
             H = int(eval_h)
             y_true_H = Y_test_all[:, H - 1]
@@ -1375,7 +1533,9 @@ class ML_Strategies:
         else:
             print(f"\n[{self.symbol}] Transformer | No test sequences produced (test too small).")
 
-        # forecast
+        # ----------------------------
+        # Future forecast
+        # ----------------------------
         anchor_ts = train_df.index[-1] if use_date_split else df.index[-1]
 
         all_scaled = pd.concat([train_df_scaled, test_df_scaled], axis=0).sort_index()
@@ -1399,7 +1559,10 @@ class ML_Strategies:
             "forecast_price": forecast_prices
         })
 
-        out_csv = os.path.join(output_dir, f"{self.symbol}_transformer_forecast_{self.bar_length}_fs{int(future_steps)}.csv")
+        out_csv = os.path.join(
+            output_dir,
+            f"{self.symbol}_transformer_forecast_{self.bar_length}_fs{int(future_steps)}.csv"
+        )
         forecast_df.to_csv(out_csv, index=False)
         print(f"\n[{self.symbol}] Saved Transformer future forecast CSV: {out_csv}")
 
@@ -1419,12 +1582,17 @@ class ML_Strategies:
         plt.legend()
         plt.tight_layout()
 
-        out_png = os.path.join(output_dir, f"{self.symbol}_transformer_actual_plus_forecast_{self.bar_length}_fs{int(future_steps)}.png")
+        out_png = os.path.join(
+            output_dir,
+            f"{self.symbol}_transformer_actual_plus_forecast_{self.bar_length}_fs{int(future_steps)}.png"
+        )
         plt.savefig(out_png, dpi=200)
         plt.close()
         print(f"[{self.symbol}] Saved combined plot: {out_png}")
 
+        # ----------------------------
         # EMA actual vs pred (1-step reconstruction)
+        # ----------------------------
         df_all_scaled = pd.concat([train_df_scaled, test_df_scaled], axis=0).sort_index()
         X_all, _, idx_all = create_supervised_sequences(df_all_scaled, feature_cols, time_step=ts, f_steps=int(future_steps))
         if len(X_all) == 0:

@@ -1,12 +1,11 @@
 import Loading_Config_BN as Loading_Config_BN
-import Loading_Config_IB as Loading_Config_IB
 from Back_Testing_ML_BN import ML_Strategies
 import Strategy_Optimizer
 import pandas as pd
 import os
 
 from Config_Check import make_request_with_retries,Debug_function
-from tkinter import TRUE
+#from tkinter import TRUE
 from Trader_BN import FuturesTrader_BN
 from Back_Testing_BN import BackTesting_BN
 from Forecast_Testing import ForecastTesting  
@@ -14,7 +13,6 @@ from Loading_Strategy import StrategyLoader
 from Loading_ForecastModel import LoadingForecastModel
 from Unsupervised_learning_trading_strategy import Unsupervised_learning_trading_strategy
 
-from ib_insync import *
 #from ib_insync import IB, Forex, Stock, Future, Contract
 from binance import Client
 
@@ -128,21 +126,25 @@ def run_binance(Broker):
         ml.ML_Strategy(CFModel=None, parameters=None)
 
         # 1) Conv1D
-        forecast_df_conv1d = ml.run_future_prediction_conv1d_binance(
-            future_steps=48,
-            eval_h=24,
-            n_trials=30,
-            skip_tuning_if_best_exists=False,
-            window_size=3000,
-            step_size=750,
-            wfv_test_slice=50,
-            wfv_max_epochs=8,
-            wfv_patience=2,
-            enable_eager_debug=False,
-            final_epochs=20,
-            global_seed=42,
-            output_dir="Forecasts",
-        )
+        #forecast_df_conv1d = ml.run_future_prediction_conv1d_binance(
+        #    future_steps=48,
+        #    eval_h=24,
+        #    n_trials=30,
+        #    skip_tuning_if_best_exists=False,
+        #    window_size=3000,
+        #    step_size=750,
+        #    wfv_test_slice=50,
+        #    wfv_max_epochs=8,
+        #    wfv_patience=2,
+        #    enable_eager_debug=False,
+        #    final_epochs=20,
+        #    global_seed=42,
+        #    output_dir="Forecasts",
+        #)
+
+        import gc, tensorflow as tf
+        tf.keras.backend.clear_session()
+        gc.collect()
 
         # 2) Transformer
         forecast_df_tr = ml.run_future_prediction_transformer_binance_optuna(
