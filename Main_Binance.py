@@ -1,11 +1,12 @@
 import Loading_Config_BN as Loading_Config_BN
+#import Loading_Config_IB as Loading_Config_IB
 from Back_Testing_ML_BN import ML_Strategies
 import Strategy_Optimizer
 import pandas as pd
 import os
 
 from Config_Check import make_request_with_retries,Debug_function
-#from tkinter import TRUE
+from tkinter import TRUE
 from Trader_BN import FuturesTrader_BN
 from Back_Testing_BN import BackTesting_BN
 from Forecast_Testing import ForecastTesting  
@@ -13,6 +14,7 @@ from Loading_Strategy import StrategyLoader
 from Loading_ForecastModel import LoadingForecastModel
 from Unsupervised_learning_trading_strategy import Unsupervised_learning_trading_strategy
 
+#from ib_insync import *
 #from ib_insync import IB, Forex, Stock, Future, Contract
 from binance import Client
 
@@ -48,6 +50,8 @@ def run_binance(Broker):
     start_date, end_date, symbol, bar_length, leverage, strategy, tc, test_days,metric , ForecastModelName ,\
     future_forecast_steps = Loading_Config_BN.prepare_data_from_config(config,Broker=Broker,mode=mode)
 
+    opt_metric, opt_n_splits, opt_min_trades, opt_min_win_rate, opt_max_drawdown, opt_warmup_bars, opt_max_workers = Loading_Config_BN.get_optimization_settings(config)
+
     # Load API keys from file
     try:
         api_key, secret_key = Loading_Config_BN.load_api_keys(os.path.join(Path_Configs, "KEY.txt"))
@@ -74,27 +78,70 @@ def run_binance(Broker):
     if Perform_BackTesting:
         print("\nFutures Back Testing is enabled\n")
 
-        description, parameters_BT, param_ranges_BT = strategy_loader.process_strategy(strategy)
+        description, parameters_BT, param_ranges_BT = strategy_loader.process_strategy(strategy, Print_Data)
 
         print(f"\nStrategy: {strategy}")
         print(f"Description: {description}")
         print(f"Parameters Back Testing: {parameters_BT}")
         print(f"Parameter Ranges: {param_ranges_BT}\n")
         
-        backtesting = BackTesting_BN(client=client, symbol=symbol, bar_length=bar_length,
-                                start=start_date, end=end_date, tc=tc,leverage=leverage, strategy=strategy)
+        backtesting = BackTesting_BN(
+            client=client,
+            symbol=symbol,
+            bar_length=bar_length,
+            start=start_date,
+            end=end_date,
+            tc=tc,
+            leverage=leverage,
+            strategy=strategy,
+        )
+
+        # Initial backtest with default indicator parameters only
         backtesting.test_strategy(parameters_BT)
         backtesting.add_leverage(leverage=leverage)
-        backtesting.plot_strategy_comparison(leverage=True,plot_name=f"{symbol}_{strategy}")
-        backtesting.plot_all_indicators(plot_name=f"{symbol}_{strategy}", Print_Data = Print_Data)
+        backtesting.plot_strategy_comparison(
+            leverage=True,
+            plot_name=f"{symbol}_{strategy}"
+        )
+        backtesting.plot_all_indicators(
+            plot_name=f"{symbol}_{strategy}",
+            Print_Data=Print_Data
+        )
         print(backtesting.results.trades.value_counts())
-        parameters_BT  = backtesting.optimize_strategy(param_ranges_BT,metric,output_file=f"{strategy}_optimize_results.csv", Print_Data = Print_Data)
-        if not parameters_BT == None :      
-            backtesting.test_strategy(parameters_BT)
+
+        # Optimization: indicator params + SL/TP params
+        parameters_BT = backtesting.optimize_strategy_parallel(
+            param_ranges_BT,
+            metric=opt_metric,
+            output_file=f"{strategy}_optimize_results.csv",
+            max_workers=opt_max_workers,
+            n_splits=opt_n_splits,
+            min_trades=opt_min_trades,
+            min_win_rate=opt_min_win_rate,
+            max_drawdown_limit=opt_max_drawdown,
+            warmup_bars=opt_warmup_bars,
+        )
+
+        if parameters_BT is not None:
+            # Do NOT call test_strategy(parameters_BT) here.
+            # find_best_strategy() already ran the correct final backtest
+            # with indicator params separated from SL/TP.
+
             backtesting.add_leverage(leverage=leverage)
-            backtesting.plot_strategy_comparison(leverage=True,plot_name=f"WOpt_{symbol}_{strategy}")
-            backtesting.plot_all_indicators(plot_name=f"{symbol}_{strategy}", Print_Data = Print_Data)
-        else :
+
+            backtesting.plot_strategy_comparison(
+                leverage=True,
+                plot_name=f"WOpt_{symbol}_{strategy}"
+            )
+
+            backtesting.plot_all_indicators(
+                plot_name=f"WOpt_{symbol}_{strategy}",
+                Print_Data=Print_Data
+            )
+
+            print(backtesting.results.trades.value_counts())
+
+        else:
             print("Parameters (BT) is : None")
 ################################################################################################################   
     if (Perform_MLBackTesting):
@@ -126,25 +173,21 @@ def run_binance(Broker):
         ml.ML_Strategy(CFModel=None, parameters=None)
 
         # 1) Conv1D
-        #forecast_df_conv1d = ml.run_future_prediction_conv1d_binance(
-        #    future_steps=48,
-        #    eval_h=24,
-        #    n_trials=30,
-        #    skip_tuning_if_best_exists=False,
-        #    window_size=3000,
-        #    step_size=750,
-        #    wfv_test_slice=50,
-        #    wfv_max_epochs=8,
-        #    wfv_patience=2,
-        #    enable_eager_debug=False,
-        #    final_epochs=20,
-        #    global_seed=42,
-        #    output_dir="Forecasts",
-        #)
-
-        import gc, tensorflow as tf
-        tf.keras.backend.clear_session()
-        gc.collect()
+        forecast_df_conv1d = ml.run_future_prediction_conv1d_binance(
+            future_steps=48,
+            eval_h=24,
+            n_trials=30,
+            skip_tuning_if_best_exists=False,
+            window_size=3000,
+            step_size=750,
+            wfv_test_slice=50,
+            wfv_max_epochs=8,
+            wfv_patience=2,
+            enable_eager_debug=False,
+            final_epochs=20,
+            global_seed=42,
+            output_dir="Forecasts",
+        )
 
         # 2) Transformer
         forecast_df_tr = ml.run_future_prediction_transformer_binance_optuna(
