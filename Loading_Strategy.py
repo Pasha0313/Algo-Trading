@@ -10,28 +10,42 @@ class StrategyLoader:
         """Fetch the strategy config by its name"""
         return self.strategies.get(strategy_name, None)
 
-    def process_strategy(self, strategy_name,Print_Data):
-        """Process and return the strategy config in a suitable format"""
+    def process_strategy(self, strategy_name, Print_Data=False):
+        """Process and return the strategy config in a suitable format."""
         strategy_config = self.get_strategy_config(strategy_name)
-        
+
         if strategy_config is None:
             raise ValueError(f"Strategy '{strategy_name}' not found.")
 
-        # Get the description, parameters, and ranges
         description = strategy_config["description"]
         parameters = tuple(strategy_config["parameters"])
-        if Print_Data : print('CheckUP : ',parameters)
+
+        if Print_Data:
+            print("CheckUP : ", parameters)
+
         param_ranges = {}
 
-        # Convert parameter ranges to appropriate range/list objects dynamically
-        for key, value in strategy_config["param_ranges"].items():
-            start, stop, step = value  
-            if all(isinstance(v, int) for v in value):  
-                param_ranges[key] = range(start, stop, step)
-            elif all(isinstance(v, (int, float)) for v in value):  
-                param_ranges[key] = [start + i * step for i in range(int((stop - start) / step))]
+        def expand_range(value):
+            start, stop, step = value
+
+            if step == 0:
+                raise ValueError(f"Step cannot be zero for range: {value}")
+
+            if all(isinstance(v, int) for v in value):
+                return range(start, stop, step)
+
+            elif all(isinstance(v, (int, float)) for v in value):
+                n = int((stop - start) / step)
+                return [round(start + i * step, 10) for i in range(n)]
+
             else:
-                raise TypeError(f"Invalid range values for {key}: {value}")
+                raise TypeError(f"Invalid range values: {value}")
+
+        for key, value in strategy_config.get("param_ranges", {}).items():
+            param_ranges[key] = expand_range(value)
+
+        for key, value in strategy_config.get("risk_param_ranges", {}).items():
+            param_ranges[key] = expand_range(value)
 
         return description, parameters, param_ranges
     
