@@ -50,19 +50,30 @@ class BackTestingBase_BN:
             logger.error(f"Failed to fetch data: {e}")
             raise
 
-    def test_strategy(self, parameters):
+    def test_strategy(self, parameters, use_sl_tp=False, stop_loss_pct=0.03, take_profit_pct=0.06):
         self.prepare_data(parameters)
-        self.run_backtest()
+
+        self.run_backtest(
+            use_sl_tp=use_sl_tp,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+        )
+
         data = self.results.copy()
         data["creturns"] = data["returns"].cumsum().apply(np.exp)
         data["cstrategy"] = data["strategy"].cumsum().apply(np.exp)
         self.results = data
-        #self.print_performance()
 
-    def run_backtest(self):
+    def run_backtest(self, use_sl_tp=False, stop_loss_pct=0.03, take_profit_pct=0.06):
         if self.results is None:
             raise ValueError("No strategy results available. Please generate results first.")
-        
+
+        if use_sl_tp:
+            self.apply_stop_loss_take_profit(
+                stop_loss_pct=stop_loss_pct,
+                take_profit_pct=take_profit_pct
+            )
+
         data = self.results.copy()
         data["strategy"] = data["position"].shift(1) * data["returns"]
         data["trades"] = data.position.diff().fillna(0).abs()
@@ -163,32 +174,108 @@ class BackTestingBase_BN:
         if self.data is None:
             raise ValueError("No data available to calculate periodicity.")
         return self.data.Close.count() / ((self.data.index[-1] - self.data.index[0]).days / 365.25)    
+    
+    def apply_stop_loss_take_profit(self, stop_loss_pct=0.03, take_profit_pct=0.06):
+        data = self.results.copy()
+
+        position = data["position"].copy()
+        close = data["Close"]
+
+        active_pos = 0
+        entry_price = None
+
+        for i in range(1, len(data)):
+            signal_pos = position.iloc[i]
+
+            if active_pos == 0:
+                if signal_pos != 0:
+                    active_pos = signal_pos
+                    entry_price = close.iloc[i]
+                position.iloc[i] = active_pos
+                continue
+
+            if active_pos == 1:
+                if close.iloc[i] <= entry_price * (1 - stop_loss_pct) or close.iloc[i] >= entry_price * (1 + take_profit_pct):
+                    active_pos = 0
+                    entry_price = None
+                position.iloc[i] = active_pos
+
+            elif active_pos == -1:
+                if close.iloc[i] >= entry_price * (1 + stop_loss_pct) or close.iloc[i] <= entry_price * (1 - take_profit_pct):
+                    active_pos = 0
+                    entry_price = None
+                position.iloc[i] = active_pos
+
+            if active_pos == 0 and signal_pos != 0:
+                active_pos = signal_pos
+                entry_price = close.iloc[i]
+
+        data["position_raw"] = data["position"]
+        data["position"] = position
+        self.results = data
 
 #######################################################################################################
 #                                       plot_results
 #######################################################################################################
 
-    def plot_strategy_comparison(self, leverage=False,plot_name=None,plot_show=True):
+    def plot_strategy_comparison(self, leverage=False, plot_name=None, plot_show=True):
         if self.results is None:
             logger.warning("Run test_strategy() first.")
-        else:
-            title = f"{self.strategy} | {self.symbol} | TC = {self.tc}"
-            if leverage:
-                title += f" | Leverage = {self.leverage}"
+            return
 
-            plt.figure(figsize=(10, 6))
-            plt.plot(self.results.index, self.results["creturns"], label="Buy and Hold")
-            plt.plot(self.results.index, self.results["cstrategy"], label="Strategy")
-            if leverage and "cstrategy_leverage" in self.results.columns:
-                plt.plot(self.results.index, self.results["cstrategy_leverage"], label="Strategy Leverage")
-            plt.xticks(rotation=45)
-            plt.title(title)
-            plt.legend()
-            plt.savefig(os.path.join(Plot_folder, f'Comparison_{plot_name}.png'))            
-            if plot_show:
-                plt.show()
-            else:
-                plt.close()
+        data = self.results.copy()
+
+        title = f"{self.strategy} | {self.symbol} | TC = {self.tc}"
+        if leverage:
+            title += f" | Leverage = {self.leverage}"
+
+        equity_col = "cstrategy_leverage" if leverage and "cstrategy_leverage" in data.columns else "cstrategy"
+
+        data["drawdown"] = data[equity_col] / data[equity_col].cummax() - 1
+
+        fig, axes = plt.subplots(
+            2,
+            1,
+            figsize=(12, 6),
+            sharex=True,
+            gridspec_kw={"height_ratios": [3, 1]}
+        )
+
+        axes[0].plot(data.index, data["creturns"], label="Buy & Hold", linewidth=1.5)
+        axes[0].plot(data.index, data["cstrategy"], label="Strategy", linewidth=1.5)
+
+        if leverage and "cstrategy_leverage" in data.columns:
+            axes[0].plot(
+                data.index,
+                data["cstrategy_leverage"],
+                label=f"Strategy x{self.leverage}",
+                linewidth=1.8
+            )
+
+        axes[0].set_title(title)
+        axes[0].set_ylabel("Cumulative Multiple")
+        axes[0].grid(True, alpha=0.3)
+        axes[0].legend()
+
+        axes[1].fill_between(data.index, data["drawdown"], 0, alpha=0.4)
+        axes[1].set_title("Drawdown")
+        axes[1].set_ylabel("Drawdown")
+        axes[1].grid(True, alpha=0.3)
+
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        plot_path = os.path.join(
+            Plot_folder,
+            f"Comparison_{plot_name}.png" if plot_name else "Comparison_plot.png"
+        )
+
+        plt.savefig(plot_path, dpi=200, bbox_inches="tight")
+
+        if plot_show:
+            plt.show()
+        else:
+            plt.close()
 
     def plot_results_II(self,plot_show=True):
         ''' Plots a scatter plot of volume change against returns.
@@ -251,82 +338,201 @@ class BackTestingBase_BN:
             else:
                 plt.close()   
 
-    def plot_all_indicators(self, plot_name=None,plot_show=True, Print_Data= False):
+    def plot_all_indicators(self, plot_name=None, plot_show=True, Print_Data=False):
         if self.results is None:
             logger.warning("Run test_strategy() first.")
             return
 
         data = self.results.copy()
 
-        title = f"{self.strategy} | {self.symbol} | TC = {self.tc}"
-        
-        available_columns = data.columns
-        if Print_Data : print(f"Available columns in results: {available_columns}")
+        if data.empty:
+            logger.warning("Results are empty.")
+            return
 
-        if "Stoch_RSI" in available_columns:
-            data["Stoch_RSI_n"] = data["Stoch_RSI"] * 100  
-            data.drop(columns=["Stoch_RSI"], inplace=True) 
-            available_columns = data.columns 
+        available_columns = data.columns.tolist()
 
-        if "std_dev" in available_columns:
+        if Print_Data:
+            print(f"Available columns in results:\n{available_columns}")
+
+        # ============================
+        # Normalized / derived columns
+        # ============================
+        if "Stoch_RSI" in data.columns:
+            data["Stoch_RSI_n"] = data["Stoch_RSI"] * 100
+
+        if "std_dev" in data.columns and "SMA" in data.columns:
             data["std_dev_n"] = data["std_dev"] / data["SMA"]
-            data.drop(columns=["std_dev"], inplace=True) 
-            available_columns = data.columns              
 
-        price_indicators = ["Close", "SMA", "Upper_Band", "Lower_Band"]
-        momentum_indicators = ["ADX", "RSI", "Stoch_RSI_n"]  
-        volatility_indicators = ["ATR", "BB_Width", "std_dev_n"]
+        if "returns" in data.columns:
+            data["returns_pct"] = data["returns"] * 100
 
-        price_columns = [col for col in price_indicators if col in available_columns]
-        momentum_columns = [col for col in momentum_indicators if col in available_columns]
-        volatility_columns = [col for col in volatility_indicators if col in available_columns]
-        
-        position_available = "position" in available_columns
+        # ============================
+        # Column groups
+        # ============================
+        price_cols = [
+            "Close", "Open", "High", "Low",
+            "SMA", "SMA_S", "SMA_M", "SMA_L",
+            "EMA", "EMA_S", "EMA_L", "EMA_Fast", "EMA_Slow",
+            "TEMA", "Hull_MA", "VWAP", "VWMA",
+            "Upper_Band", "Lower_Band", "Middle_Band",
+            "Upper_Envelope", "Lower_Envelope",
+            "High_Max", "Low_Min",
+            "Donchian_High", "Donchian_Low",
+            "Keltner_Upper", "Keltner_Lower",
+            "Chandelier_Exit",
+            "PSAR",
+            "Supertrend",
+            "Linear_Regression",
+            "Pivot_Point", "R1", "S1",
+            "Fibonacci_23_6", "Fibonacci_38_2", "Fibonacci_50",
+            "Fibonacci_61_8", "Fibonacci_78_6",
+            "Gann_1x1", "Gann_2x1", "Gann_3x1",
+        ]
 
+        oscillator_cols = [
+            "RSI", "Stoch_RSI_n", "Williams_R", "CCI",
+            "CMO", "ROC", "UO", "Momentum",
+            "Momentum_Oscillator", "Price_Oscillator",
+            "z_score", "Trix",
+        ]
 
-        num_plots = 3 + int(position_available)  
-        fig, axes = plt.subplots(num_plots, 1, figsize=(10, 8), sharex=True)
+        trend_cols = [
+            "ADX", "DI_plus", "DI_minus",
+            "MACD", "MACD_Signal", "MACD_Histogram",
+            "Aroon_Up", "Aroon_Down",
+            "Klinger", "Chaikin_Oscillator",
+            "BullPower", "BearPower",
+            "Force_Index",
+        ]
 
-        plot_index = 0  
-        
-        # **Plot 1: Price-Related Indicators**
-        if price_columns:
-            for col in price_columns:
-                axes[plot_index].plot(data.index, data[col], label=col)
-            axes[plot_index].set_title("Price Indicators")
-            axes[plot_index].legend()
-            plot_index += 1
+        volume_cols = [
+            "Volume", "vol_ch", "CMF", "MFI", "ADL",
+            "OBV", "Volume_Delta", "dollar_volume",
+            "Taker Buy Base Asset Volume",
+            "Taker Buy Quote Asset Volume",
+        ]
 
-        # **Plot 2: Momentum Indicators (ADX, RSI, Stoch_RSI_n)**
-        if momentum_columns:
-            for col in momentum_columns:
-                axes[plot_index].plot(data.index, data[col], label=col)
-            axes[plot_index].set_title("Momentum Indicators")
-            axes[plot_index].legend()
-            plot_index += 1
+        volatility_cols = [
+            "ATR", "BB_Width", "std_dev_n",
+            "Garman_Klass", "variance",
+            "hl_range", "atr14",
+        ]
 
-        # **Plot 3: Volatility Indicators (ATR, BB Width, std_dev)**
-        if volatility_columns:
-            for col in volatility_columns:
-                axes[plot_index].plot(data.index, data[col], label=col)
-            axes[plot_index].set_title("Volatility Indicators")
-            axes[plot_index].legend()
-            plot_index += 1
+        performance_cols = [
+            "creturns", "cstrategy", "cstrategy_leverage",
+            "strategy", "strategy_leverage",
+            "returns_pct",
+        ]
 
-        # **Plot 4: Trading Positions (+1 Buy, -1 Sell)**
-        if position_available:
-            axes[plot_index].plot(data.index, data["position"], label="Position", linestyle="dotted", color="black")
-            axes[plot_index].set_title("Trading Positions")
-            axes[plot_index].axhline(1, linestyle="--", color="green", alpha=0.5, label="Buy Signal (+1)")
-            axes[plot_index].axhline(-1, linestyle="--", color="red", alpha=0.5, label="Sell Signal (-1)")
-            axes[plot_index].legend()
-            plot_index += 1
+        signal_cols = [
+            "position", "trades", "prediction",
+        ]
+
+        # ============================
+        # Keep only existing columns
+        # ============================
+        def existing(cols):
+            return [c for c in cols if c in data.columns]
+
+        groups = {
+            "Price / Bands / Moving Averages": existing(price_cols),
+            "Oscillators / Momentum": existing(oscillator_cols),
+            "Trend / Directional Indicators": existing(trend_cols),
+            "Volume / Money Flow": existing(volume_cols),
+            "Volatility / Risk Indicators": existing(volatility_cols),
+            "Performance": existing(performance_cols),
+            "Trading Signals": existing(signal_cols),
+        }
+
+        # Remove empty groups
+        groups = {k: v for k, v in groups.items() if len(v) > 0}
+
+        # ============================
+        # Unknown indicator columns
+        # ============================
+        known_cols = set()
+        for cols in groups.values():
+            known_cols.update(cols)
+
+        exclude_cols = {
+            "Open Time", "Close Time", "Complete",
+            "Quote Asset Volume", "Number of Trades",
+            "Ignore",
+        }
+
+        unknown_cols = [
+            c for c in data.columns
+            if c not in known_cols
+            and c not in exclude_cols
+            and pd.api.types.is_numeric_dtype(data[c])
+        ]
+
+        # Avoid plotting too many unknown columns
+        unknown_cols = unknown_cols[:8]
+
+        if unknown_cols:
+            groups["Other Numeric Indicators"] = unknown_cols
+
+        if not groups:
+            logger.warning("No numeric indicator columns found to plot.")
+            return
+
+        # ============================
+        # Plot
+        # ============================
+        num_plots = len(groups)
+        fig_height = max(6, 1.8 * num_plots)
+
+        fig, axes = plt.subplots(
+            num_plots,
+            1,
+            figsize=(14, fig_height),
+            sharex=True
+        )
+
+        if num_plots == 1:
+            axes = [axes]
+
+        title = f"{self.strategy} | {self.symbol} | TC = {self.tc}"
+        fig.suptitle(title, fontsize=14, fontweight="bold")
+
+        for ax, (group_name, cols) in zip(axes, groups.items()):
+
+            for col in cols:
+                if col not in data.columns:
+                    continue
+
+                series = data[col].replace([np.inf, -np.inf], np.nan)
+
+                if series.dropna().empty:
+                    continue
+
+                if col == "position":
+                    ax.step(data.index, series, where="post", label=col, linewidth=1.5)
+                    ax.axhline(1, linestyle="--", alpha=0.4)
+                    ax.axhline(0, linestyle="--", alpha=0.3)
+                    ax.axhline(-1, linestyle="--", alpha=0.4)
+
+                elif col == "trades":
+                    ax.bar(data.index, series, label=col, alpha=0.4)
+
+                else:
+                    ax.plot(data.index, series, label=col, linewidth=1.2)
+
+            ax.set_title(group_name, fontsize=11)
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="best", fontsize=8)
 
         plt.xticks(rotation=45)
-        plt.tight_layout()
+        plt.tight_layout(rect=[0, 0, 1, 0.97])
 
-        plot_path = os.path.join(Plot_folder, f'Indicators_{plot_name}.png') if plot_name else f'Indicators_plot.png'
-        plt.savefig(plot_path)
+        plot_path = os.path.join(
+            Plot_folder,
+            f"Indicators_{plot_name}.png" if plot_name else "Indicators_plot.png"
+        )
+
+        plt.savefig(plot_path, dpi=200, bbox_inches="tight")
+
         if plot_show:
             plt.show()
         else:
