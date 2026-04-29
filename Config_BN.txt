@@ -2,12 +2,23 @@
 ############      Main       ###########
 ########################################
 symbol=BTCUSDT
-bar_length=15m
+bar_length=1h
 leverage=2
-strategy=MACD
-tc=-0.001
+strategy=Bollinger_Stochastic_RSI_Modified
+tc=-0.0004
 test_days=60
 metric=Sharpe
+
+########################################
+############ Optimization ##############
+########################################
+opt_metric=Robust
+opt_n_splits=3
+opt_min_trades=3
+opt_min_win_rate=0.05
+opt_max_drawdown=-0.95
+opt_warmup_bars=50
+opt_max_workers=None
 
 ########################################
 #############      AI       ############
@@ -20,9 +31,10 @@ FutureForecastSteps=10
 ########################################
 Optimize_All = False
 Unsupervised_Learning=False
-Perform_BackTesting=False
-Perform_MLBackTesting=True
-Print_Data=False
+Perform_BackTesting=True
+Perform_MLBackTesting=False
+Perform_MLFutureTesting=False
+Print_Data=True
 Perform_Forecasting=False
 Perform_Tuner=False
 Perform_Trading=False
