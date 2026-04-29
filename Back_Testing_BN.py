@@ -1,5 +1,6 @@
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from Back_Testing_Base_BN import BackTestingBase_BN
-import Strategy as strategy  
+import Strategy as strategy
 from itertools import product
 import numpy as np
 import pandas as pd
@@ -8,287 +9,348 @@ import os
 Optimize_folder = "Optimize"
 os.makedirs(Optimize_folder, exist_ok=True)
 
+
+def get_strategy_function(strategy_name):
+    special_map = {
+        "Bollinger_Bands_ADX": strategy.define_strategy_Bollinger_ADX,
+        "Bollinger_Breakout_Momentum": strategy.define_strategy_Bollinger_Breakout_Momentum_Oscillator,
+        "SuperTrend_RSI": strategy.define_strategy_ATR_RSI,
+        "MA_Momentum": strategy.define_strategy_MA_Momentum_F,
+        "Bollinger_Stochastic_RSI_Modified": strategy.define_strategy_Bollinger_Stochastic_RSI_modified,
+        "HMA_Stochastic_RSI": strategy.define_strategy_HMA_StochRSI,
+        "Supertrend_Stochastic_RSI": strategy.define_strategy_Supertrend_Stochastic_RSI,
+        "Simple_Pivot_Points": strategy.define_strategy_Simple_Pivot_Points,
+        "Volume_delta": strategy.define_strategy_volume_delta,
+        "OBV": strategy.define_strategy_OBV,
+    }
+
+    if strategy_name in special_map:
+        return special_map[strategy_name]
+
+    func_name = f"define_strategy_{strategy_name}"
+
+    if hasattr(strategy, func_name):
+        return getattr(strategy, func_name)
+
+    return None
+
+
+def evaluate_param_set_robust(job):
+    (
+        data,
+        strategy_name,
+        params,
+        param_names,
+        tc,
+        leverage,
+        tp_year,
+        n_splits,
+        min_trades,
+        min_win_rate,
+        max_drawdown_limit,
+        score_mode,
+        warmup_bars,
+    ) = job
+
+    try:
+        bt = BackTesting_BN.__new__(BackTesting_BN)
+        bt.data = data.copy()
+        bt.strategy = strategy_name
+        bt.tc = tc
+        bt.leverage = leverage
+        bt.tp_year = tp_year
+        bt.results = None
+        bt.position = None
+
+        n = len(data)
+
+        if n < 200 or n_splits < 3:
+            return params, None
+
+        fold_size = n // n_splits
+        #min_valid_folds = max(2, n_splits - 2)
+        min_valid_folds = 2
+
+        fold_sharpes = []
+        fold_pnls = []
+        fold_drawdowns = []
+        fold_win_rates = []
+        fold_trades = []
+
+        for fold in range(1, n_splits):
+            train_end = fold * fold_size
+            test_end = min((fold + 1) * fold_size, n)
+
+            if test_end <= train_end:
+                continue
+
+            start_idx = max(0, train_end - warmup_bars)
+            fold_data = data.iloc[start_idx:test_end].copy()
+
+            bt.data = fold_data
+            bt.results = None
+
+            param_dict = dict(zip(param_names, params))
+
+            stop_loss_pct = param_dict.pop("stop_loss_pct", None)
+            take_profit_pct = param_dict.pop("take_profit_pct", None)
+
+            strategy_params = tuple(param_dict.values())
+
+            use_sl_tp = stop_loss_pct is not None and take_profit_pct is not None
+
+            bt.test_strategy(
+                strategy_params,
+                use_sl_tp=use_sl_tp,
+                stop_loss_pct=stop_loss_pct if stop_loss_pct is not None else 0.03,
+                take_profit_pct=take_profit_pct if take_profit_pct is not None else 0.06,
+            )
+
+            if bt.results is None or bt.results.empty:
+                continue
+
+            res = bt.results.copy()
+
+            test_index = data.iloc[train_end:test_end].index
+            res_test = res.loc[res.index.intersection(test_index)].copy()
+
+            if len(res_test) < 10:
+                continue
+
+            strat = res_test["strategy"].replace([np.inf, -np.inf], np.nan).dropna()
+
+            if strat.empty or strat.std() == 0:
+                continue
+
+            trades = res_test["trades"].fillna(0)
+            trade_mask = trades != 0
+            num_trades = int(trade_mask.sum())
+
+            if num_trades == 0:
+                continue
+
+            ann_mean = strat.mean() * tp_year
+            ann_std = strat.std() * np.sqrt(tp_year)
+
+            if ann_std == 0 or np.isnan(ann_std):
+                continue
+
+            sharpe = float(ann_mean / ann_std)
+
+            equity = np.exp(strat.cumsum())
+            pnl_multiple = float(equity.iloc[-1])
+            drawdown = float((equity / equity.cummax() - 1).min())
+
+            trade_returns = strat.loc[
+                strat.index.intersection(res_test.loc[trade_mask].index)
+            ]
+
+            win_rate = (
+                float((trade_returns > 0).mean())
+                if len(trade_returns) > 0
+                else 0.0
+            )
+
+            if np.isnan(sharpe) or np.isnan(pnl_multiple) or np.isnan(drawdown):
+                continue
+
+            fold_sharpes.append(sharpe)
+            fold_pnls.append(pnl_multiple)
+            fold_drawdowns.append(drawdown)
+            fold_win_rates.append(win_rate)
+            fold_trades.append(float(num_trades))
+
+        if len(fold_sharpes) < min_valid_folds:
+            return params, None
+
+        mean_sharpe = float(np.mean(fold_sharpes))
+        min_sharpe = float(np.min(fold_sharpes))
+        std_sharpe = float(np.std(fold_sharpes))
+        median_pnl = float(np.median(fold_pnls))
+        max_drawdown = float(np.min(fold_drawdowns))
+        win_rate = float(np.mean(fold_win_rates))
+        num_trades = float(np.sum(fold_trades))
+        n_valid_folds = len(fold_sharpes)
+
+
+        if mean_sharpe < 0:
+            return params, None
+
+        #if median_pnl < 1.0:
+        #    return params, None
+
+        if num_trades < min_trades:
+            return params, None
+
+        if win_rate < min_win_rate:
+            return params, None
+
+        if max_drawdown < max_drawdown_limit:
+            return params, None
+
+        if n_valid_folds < 1:
+            return params, None
+
+        if std_sharpe > 4.0:
+            return params, None
+
+        if score_mode == "Sharpe":
+            score = (
+                1.00 * mean_sharpe
+                + 0.50 * min_sharpe
+                - 0.50 * std_sharpe
+                - 0.50 * abs(max_drawdown)
+            )
+
+        elif score_mode == "PnL":
+            score = (
+                0.50 * mean_sharpe
+                + 0.50 * np.log(max(median_pnl, 1e-9))
+                - 0.50 * abs(max_drawdown)
+                - 0.25 * std_sharpe
+            )
+
+        else:  # Robust
+            score = (
+                1.00 * mean_sharpe
+                + 0.50 * min_sharpe
+                - 0.75 * std_sharpe
+                + 0.30 * np.log(max(median_pnl, 1e-9))
+                - 0.50 * abs(max_drawdown)
+            )
+
+        metrics = {
+            "performance": float(score),
+            "mean_sharpe": mean_sharpe,
+            "min_sharpe": min_sharpe,
+            "std_sharpe": std_sharpe,
+            "median_pnl": median_pnl,
+            "max_drawdown": max_drawdown,
+            "win_rate": win_rate,
+            "num_trades": num_trades,
+            "n_valid_folds": n_valid_folds,
+        }
+
+        return params, metrics
+
+    except Exception:
+        return params, None
+
+def evaluate_param_set(args):
+    data, strategy_name, params, tc, leverage, metric = args
+
+    try:
+        data = data.copy()
+        strategy_func = get_strategy_function(strategy_name)
+
+        if strategy_func is None:
+            return params, np.nan
+
+        no_param_strategies = ["OBV", "Volume_delta", "Simple_Pivot_Points"]
+
+        if strategy_name in no_param_strategies:
+            results = strategy_func(data)
+        else:
+            results = strategy_func(data, params)
+
+        if results is None or "position" not in results.columns:
+            return params, np.nan
+
+        if "returns" not in results.columns:
+            results["returns"] = np.log(results["Close"] / results["Close"].shift(1))
+
+        results = results.replace([np.inf, -np.inf], np.nan).dropna().copy()
+
+        if results.empty:
+            return params, np.nan
+
+        results["strategy"] = results["position"].shift(1) * results["returns"]
+        results["trades"] = results["position"].diff().fillna(0).abs()
+        results["strategy"] += results["trades"] * tc
+
+        if metric == "Sharpe":
+            simple_ret = np.exp(results["strategy"]) - 1
+            lev_ret = leverage * simple_ret
+            lev_ret = np.where(lev_ret < -1, -1, lev_ret)
+
+            log_ret = np.log(pd.Series(lev_ret, index=results.index).add(1))
+            log_ret = log_ret.replace([np.inf, -np.inf], np.nan).dropna()
+
+            if log_ret.empty:
+                return params, np.nan
+
+            years = (results.index[-1] - results.index[0]).days / 365.25
+
+            if years <= 0:
+                return params, np.nan
+
+            tp_year = results["Close"].count() / years
+            ann_std = log_ret.std() * np.sqrt(tp_year)
+
+            if ann_std == 0 or np.isnan(ann_std):
+                return params, np.nan
+
+            cagr = np.exp(log_ret.sum()) ** (1 / years) - 1
+            score = cagr / ann_std
+
+        elif metric == "Multiple":
+            score = np.exp(results["strategy"].sum())
+
+        else:
+            return params, np.nan
+
+        if np.isnan(score) or np.isinf(score):
+            return params, np.nan
+
+        return params, score
+
+    except Exception:
+        return params, np.nan
+
+
 class BackTesting_BN(BackTestingBase_BN):
-    def __init__(self, client, symbol, bar_length, start, end=None, tc=0.0, leverage=5, strategy="PV"):
+    def __init__(
+        self,
+        client,
+        symbol,
+        bar_length,
+        start,
+        end=None,
+        tc=0.0,
+        leverage=5,
+        strategy="PV",
+    ):
         super().__init__(client, symbol, bar_length, start, end, tc, leverage, strategy)
 
     def __repr__(self):
-        return "\nFutures Backtester (symbol = {}, start = {}, end = {})\n".format(self.symbol, self.start, self.end)
-    
-    def prepare_data(self, parameters): #(return_prec_min,return_prec_high,volume_prec_min,volume_prec_high)
-        data = self.data.copy()
-        if self.strategy == "PV":  # 0. **Simple Price and Volume**
-            self.results = strategy.define_strategy_PV(data, parameters)
-        elif self.strategy == "SMA":  # 1. **Simple Moving Average**
-            self.results = strategy.define_strategy_SMA(data, parameters)
-        elif self.strategy == "MACD":  # 2. **Moving Average Convergence Divergence (MACD) Histogram**
-            self.results = strategy.define_strategy_MACD(data, parameters)
-        elif self.strategy == "RSI_MA":  # 3. **RSI with Moving Average**
-            self.results = strategy.define_strategy_RSI_MA(data, parameters)
-        elif self.strategy == "RSI":  # 4. **Relative Strength Index with Divergence (RSI Divergence)**
-            self.results = strategy.define_strategy_RSI(data, parameters)
-        elif self.strategy == "Stochastic_RSI":  # 5. **Stochastic RSI**
-            self.results = strategy.define_strategy_Stochastic_RSI(data, parameters)
-        elif self.strategy == "Bollinger_Bands_ADX":  # 6. **Bollinger Bands with ADX Trend Filter**
-            self.results = strategy.define_strategy_Bollinger_ADX(data, parameters)
-        elif self.strategy == "TEMA_momentum":  # 7. **Triple Exponential Moving Average (TEMA) with Momentum Filter**
-            self.results = strategy.define_strategy_TEMA_momentum(data, parameters)
-        elif self.strategy == "VWAP":  # 8. **Volume Weighted Average Price (VWAP)**
-            self.results = strategy.define_strategy_VWAP(data, parameters)
-        elif self.strategy == "VWAP_momentum":  # 9. **Volume Weighted Average Price (VWAP) with Momentum**
-            self.results = strategy.define_strategy_VWAP_momentum(data, parameters)
-        elif self.strategy == "Bollinger_breakout":  # 10. **Bollinger Bands Breakout**
-            self.results = strategy.define_strategy_Bollinger_breakout(data, parameters)
-        elif self.strategy == "Bollinger_squeeze":  # 11. **Bollinger Bands Squeeze**
-            self.results = strategy.define_strategy_Bollinger_squeeze(data, parameters)
-        elif self.strategy == "EMA_cross":  # 12. **Exponential Moving Average Cross Strategy**
-            self.results = strategy.define_strategy_EMA_cross(data, parameters)
-        elif self.strategy == "EMA_envelope":  # 13. **Exponential Moving Average Envelope**
-            self.results = strategy.define_strategy_EMA_envelope(data, parameters)
-        elif self.strategy == "TEMA":  # 14. **Triple Exponential Moving Average (TEMA)**
-            self.results = strategy.define_strategy_TEMA(data, parameters)
-        elif self.strategy == "Donchian":  # 15. **Donchian Channel**
-            self.results = strategy.define_strategy_Donchian(data, parameters)
-        elif self.strategy == "Aroon":  # 16. **Aroon Indicator**
-            self.results = strategy.define_strategy_Aroon(data, parameters)
-        elif self.strategy == "WilliamsR":  # 17. **Williams %R**
-            self.results = strategy.define_strategy_WilliamsR(data, parameters)
-        elif self.strategy == "Elder_Ray":  # 18. **Elder Ray Index**
-            self.results = strategy.define_strategy_Elder_Ray(data, parameters)
-        elif self.strategy == "Klinger":  # 19. **Klinger Oscillator**
-            self.results = strategy.define_strategy_Klinger(data, parameters)
-        elif self.strategy == "CMO":  # 20. **Chande Momentum Oscillator (CMO)**
-            self.results = strategy.define_strategy_CMO(data, parameters)
-        elif self.strategy == "Price_Oscillator":  # 21. **Price Oscillator**
-            self.results = strategy.define_strategy_Price_Oscillator(data, parameters)
-        elif self.strategy == "Ultimate_Oscillator":  # 22. **Ultimate Oscillator**
-            self.results = strategy.define_strategy_Ultimate_Oscillator(data, parameters)
-        elif self.strategy == "Chaikin":  # 23. **Chaikin Oscillator**
-            self.results = strategy.define_strategy_Chaikin(data, parameters)
-        elif self.strategy == "CMF":  # 24. **Chaikin Money Flow (CMF)**
-            self.results = strategy.define_strategy_CMF(data, parameters)
-        elif self.strategy == "Fractal_Chaos":  # 25. **Fractal Chaos Bands**
-            self.results = strategy.define_strategy_Fractal_Chaos(data, parameters)
-        elif self.strategy == "SuperTrend":  # 26. **SuperTrend**
-            self.results = strategy.define_strategy_SuperTrend(data, parameters)
-        elif self.strategy == "ZigZag":  # 27. **ZigZag Indicator**
-            self.results = strategy.define_strategy_ZigZag(data, parameters)
-        elif self.strategy == "Hull_MA":  # 28. **Hull Moving Average**
-            self.results = strategy.define_strategy_Hull_MA(data, parameters)
-        elif self.strategy == "Gann_Fan":  # 29. **Gann Fan**
-            self.results = strategy.define_strategy_Gann_Fan(data, parameters)
-        elif self.strategy == "ROC":  # 30. **Price Rate of Change (ROC)**
-            self.results = strategy.define_strategy_ROC(data, parameters)
-        elif self.strategy == "MFI_divergence":  # 31. **MFI (Money Flow Index) Divergence**
-            self.results = strategy.define_strategy_MFI_divergence(data, parameters)
-        elif self.strategy == "PSAR_simple":  # 32. **Parabolic SAR (PSAR)**
-            self.results = strategy.define_strategy_PSAR_simple(data, parameters)
-        elif self.strategy == "CMF_ADX":  # 33. **Chaikin Money Flow (CMF) with ADX**
-            self.results = strategy.define_strategy_CMF_ADX(data, parameters)
-        elif self.strategy == "PSAR_momentum":  # 34. **Parabolic SAR (PSAR) with Momentum**
-            self.results = strategy.define_strategy_PSAR_momentum(data, parameters)
-        elif self.strategy == "Trix":  # 35. **Trix Indicator**
-            self.results = strategy.define_strategy_Trix(data, parameters)
-        elif self.strategy == "Keltner_channel":  # 36. **Keltner Channel Breakout**
-            self.results = strategy.define_strategy_Keltner_channel(data, parameters)
-        elif self.strategy == "Momentum":  # 37. **Momentum Strategy**
-            self.results = strategy.define_strategy_Momentum(data, parameters)
-        elif self.strategy == "Ichimoku":  # 38. **Ichimoku Cloud**
-            self.results = strategy.define_strategy_Ichimoku(data, parameters)
-        elif self.strategy == "Zscore":  # 39. **Z-Score Mean Reversion**
-            self.results = strategy.define_strategy_Zscore(data, parameters)
-        elif self.strategy == "MA_envelope":  # 40. **Moving Average Envelope**
-            self.results = strategy.define_strategy_MA_envelope(data, parameters)
-        elif self.strategy == "ATR":  # 41. **Average True Range (ATR) Breakout**
-            self.results = strategy.define_strategy_ATR(data, parameters)
-        elif self.strategy == "ADX":  # 42. **Average Directional Index (ADX)**
-            self.results = strategy.define_strategy_ADX(data, parameters)
-        elif self.strategy == "CCI":  # 43. **Commodity Channel Index (CCI)**
-            self.results = strategy.define_strategy_CCI(data, parameters)
-        elif self.strategy == "Linear_Regression":  # 44. **Linear Regression Channel**
-            self.results = strategy.define_strategy_Linear_Regression(data, parameters)
-        elif self.strategy == "VWMA_Price_Oscillator":  # 45. **Volume Weighted Moving Average (VWMA) with Price Oscillator**
-            self.results = strategy.define_strategy_VWMA_Price_Oscillator(data, parameters)
-        elif self.strategy == "Dynamic_Pivot_Points":  # 46. **Dynamic Pivot Points Classic Strategy**
-            self.results = strategy.define_strategy_Dynamic_Pivot_Points_Classic(data, parameters)
-        elif self.strategy == "Force_Index":  # 47. **Force Index**
-            self.results = strategy.define_strategy_Force_Index(data, parameters)
-        elif self.strategy == "Chandelier_Exit":  # 48. **Chandelier Exit**
-            self.results = strategy.define_strategy_Chandelier_Exit(data, parameters)
-        elif self.strategy == "Fibonacci":  # 49. **Fibonacci Retracement Levels**
-            self.results = strategy.define_strategy_Fibonacci(data, parameters)
-        elif self.strategy == "ADL":  # 50. **Accumulation/Distribution Line (A/D Line)**
-            self.results = strategy.define_strategy_ADL(data, parameters)
-        elif self.strategy == "RSI_Bollinger":  # 51. **RSI with Bollinger Bands**
-            self.results = strategy.define_strategy_RSI_Bollinger(data, parameters)
-        elif self.strategy == "Turtle_Trading":  # 52. **Turtle Trading**
-            self.results = strategy.define_strategy_Turtle_Trading(data, parameters)
-        elif self.strategy == "Mean_Reversion":  # 53. **Mean Reversion Strategy**
-            self.results = strategy.define_strategy_Mean_Reversion(data, parameters)
-        elif self.strategy == "Breakout":  # 54. **Breakout Strategy**
-            self.results = strategy.define_strategy_Breakout(data, parameters)
-        elif self.strategy == "RSI_Divergence":  # 55. **RSI Divergence Strategy**
-            self.results = strategy.define_strategy_RSI_Divergence(data, parameters)
-        elif self.strategy == "MA_Cross_RSI":  # 56. **Moving Average Cross with RSI Filter**
-            self.results = strategy.define_strategy_MA_Cross_RSI(data, parameters)
-        elif self.strategy == "ADX_MA":  # 57. **ADX with Moving Averages**
-            self.results = strategy.define_strategy_ADX_MA(data, parameters)
-        elif self.strategy == "Bollinger_Breakout_Momentum":  # 58. **Bollinger Bands Breakout with Momentum Oscillator**
-            self.results = strategy.define_strategy_Bollinger_Breakout_Momentum_Oscillator(data, parameters)
-        elif self.strategy == "Fibonacci_MA":  # 59. **Fibonacci Retracement with Moving Average Filter**
-            self.results = strategy.define_strategy_Fibonacci_MA(data, parameters)
-        elif self.strategy == "Mean_Variance_Optimization":  # 60. **Mean-Variance Optimization Strategy**
-            self.results = strategy.define_strategy_Mean_Variance_Optimization(data, parameters)
-        elif self.strategy == "MA_ribbon":  # 61. **Moving Average Ribbon**
-            self.results = strategy.define_strategy_MA_ribbon(data, parameters)
-        elif self.strategy == "ADX_DI":  # 62. **ADX + DI (Directional Indicators)**
-            self.results = strategy.define_strategy_ADX_DI(data, parameters)
-        elif self.strategy == "MACD_RSI":  # 63. **MACD Histogram with RSI**
-            self.results = strategy.define_strategy_MACD_RSI(data, parameters)
-        elif self.strategy == "Fibonacci_retracement":  # 64. **Fibonacci Retracement Strategy**
-            self.results = strategy.define_strategy_Fibonacci_retracement(data, parameters)
-        elif self.strategy == "RSI_trend_reversal":  # 65. **Relative Strength Index (RSI) Trend Reversal Strategy**
-            self.results = strategy.define_strategy_RSI_trend_reversal(data, parameters)
-        elif self.strategy == "CMO_EMA":  # 66. **Chande Momentum Oscillator with EMA**
-            self.results = strategy.define_strategy_CMO_EMA(data, parameters)
-        elif self.strategy == "MA_momentum":  # 67. **Moving Average Cross with Momentum**
-            self.results = strategy.define_strategy_MA_momentum(data, parameters)
-        elif self.strategy == "RSI_Stochastic":  # 68. **RSI and Stochastic Oscillator**
-            self.results = strategy.define_strategy_RSI_Stochastic(data, parameters)
-        elif self.strategy == "Garman_Klass":  # 69. **Garman-Klass Volatility Strategy**
-            self.results = strategy.define_strategy_Garman_Klass_Volatility(data, parameters)
-        elif self.strategy == "Momentum_MACD":  # 70. **Momentum Oscillator with MACD**
-            self.results = strategy.define_strategy_Momentum_MACD(data, parameters)
-        elif self.strategy == "Bollinger_Stochastic":  # 71. **Bollinger Bands with Stochastic Oscillator**
-            self.results = strategy.define_strategy_Bollinger_Stochastic(data, parameters)
-        elif self.strategy == "Momentum_Breakout":  # 72. **Momentum Breakout Strategy**
-            self.results = strategy.define_strategy_Momentum_Breakout(data, parameters)
-        elif self.strategy == "EMA_MACD":  # 73. **Exponential Moving Average Convergence Divergence (EMA MACD)**
-            self.results = strategy.define_strategy_EMA_MACD(data, parameters)
-        elif self.strategy == "Bollinger_EMA":  # 74. **Bollinger Bands + EMA Cross**
-            self.results = strategy.define_strategy_Bollinger_EMA(data, parameters)
-        elif self.strategy == "MA_Momentum":  # 75. **Moving Average Cross with Momentum Filter**
-            self.results = strategy.define_strategy_MA_Momentum_F(data, parameters)
-        elif self.strategy == "Pivot_Stochastic":  # 76. **Pivot Points with Stochastic Oscillator**
-            self.results = strategy.define_strategy_Pivot_Stochastic(data, parameters)
-        elif self.strategy == "VWMA":  # 77. **Volume Weighted Moving Average (VWMA)**
-            self.results = strategy.define_strategy_VWMA(data, parameters)
-        elif self.strategy == "EMA_Momentum":  # 78. **Exponential Moving Average with Momentum**
-            self.results = strategy.define_strategy_EMA_Momentum(data, parameters)
-        elif self.strategy == "RSI_A_MA":  # 79. **RSI and Moving Average**
-            self.results = strategy.define_strategy_RSI_A_MA(data, parameters)
-        elif self.strategy == "EMA_Ribbon":  # 80. **Exponential Moving Average Ribbon**
-            self.results = strategy.define_strategy_EMA_Ribbon(data, parameters)
-        elif self.strategy == "RSI_MA_Envelope":  # 81. **RSI and Moving Average Envelope**
-            self.results = strategy.define_strategy_RSI_MA_Envelope(data, parameters)
-        elif self.strategy == "OBV_RSI":  # 82. **On-Balance Volume (OBV) with RSI**
-            self.results = strategy.define_strategy_OBV_RSI(data, parameters)
-        elif self.strategy == "SuperTrend_RSI":  # 83. **SuperTrend with RSI**
-            self.results = strategy.define_strategy_ATR_RSI(data, parameters)
-        elif self.strategy == "EMA_Bollinger":  # 84. **Exponential Moving Average with Bollinger Bands**
-            self.results = strategy.define_strategy_EMA_Bollinger(data, parameters)
-        elif self.strategy == "RSI_MA_Ribbon":  # 85. **RSI and Moving Average Ribbon**
-            self.results = strategy.define_strategy_RSI_MA_Ribbon(data, parameters)
-        elif self.strategy == "EMA_ADX":  # 86. **EMA Crossover with ADX Filter**
-            self.results = strategy.define_strategy_EMA_ADX(data, parameters)
-        elif self.strategy == "RSI_Bollinger_Momentum":  # 87. **RSI with Bollinger Bands and Momentum Filter**
-            self.results = strategy.define_strategy_RSI_Bollinger_Momentum(data, parameters)
-        elif self.strategy == "Renko_Box":  # 88. **Renko Box Trading Strategy**
-            self.results = strategy.define_strategy_Renko_Box_Trading(data, parameters)
-        elif self.strategy == "ADX_Stochastic":  # 89. **ADX with Stochastic Oscillator**
-            self.results = strategy.define_strategy_ADX_Stochastic(data, parameters)
-        elif self.strategy == "MA_Ribbon_ADX":  # 90. **Moving Average Ribbon with ADX Filter**
-            self.results = strategy.define_strategy_MA_Ribbon_ADX(data, parameters)
-        elif self.strategy == "EMA_Stochastic":  # 91. **EMA with Stochastic Oscillator**
-            self.results = strategy.define_strategy_EMA_Stochastic(data, parameters)
-        elif self.strategy == "RSI_ADX":  # 92. **RSI with ADX Filter**
-            self.results = strategy.define_strategy_RSI_ADX(data, parameters)
-        elif self.strategy == "MACD_Stochastic":  # 93. **MACD with Stochastic Oscillator**
-            self.results = strategy.define_strategy_MACD_Stochastic(data, parameters)
-        elif self.strategy == "MACD_Bollinger":  # 94. **MACD with Bollinger Bands Filter**
-            self.results = strategy.define_strategy_MACD_Bollinger(data, parameters)
-        elif self.strategy == "EMA_Stochastic_Filter":  # 95. **EMA Cross with Stochastic Filter**
-            self.results = strategy.define_strategy_EMA_Stochastic_Filter(data, parameters)
-        elif self.strategy == "MACD_MA_Ribbon":  # 96. **MACD with Moving Average Ribbon**
-            self.results = strategy.define_strategy_MACD_MA_Ribbon(data, parameters)
-        elif self.strategy == "RSI_MACD_Combo":  # 97. **RSI and MACD Combo Strategy**
-            self.results = strategy.define_strategy_RSI_MACD_Combo(data, parameters)
-        elif self.strategy == "Heikin_Ashi_Trend":  # 98. **Heikin Ashi Trend Continuation Strategy**
-            self.results = strategy.define_strategy_Heikin_Ashi_Trend_Continuation(data, parameters)
-        elif self.strategy == "Bollinger_Stochastic_RSI":  # 99. **Bollinger Bands with Stochastic RSI**
-            self.results = strategy.define_strategy_Bollinger_Stochastic_RSI(data, parameters)
-        elif self.strategy == "Trend_Reversal_RSI":  # 100. **Trend Reversal with RSI**
-            self.results = strategy.define_strategy_Trend_Reversal_RSI(data, parameters)
-        elif self.strategy == "Volume_Profile":  # 101. **Volume Profile Strategy**
-            self.results = strategy.define_strategy_Volume_Profile(data, parameters)  
-        elif self.strategy == "Grid_Trading":  # 102. **Grid Trading Strategy**
-            self.results = strategy.define_strategy_Grid_Trading(data, parameters)                                          
-        elif self.strategy == "EMA_MACD_ADX":  # 103. **EMA + MACD + ADX Hybrid Strategy**
-            self.results = strategy.define_strategy_EMA_MACD_ADX(data, parameters)                                          
-        elif self.strategy == "Trend_Momentum_Volatility":  # 104. **EMA + MACD + ADX + ATR Stochastic + RSI Hybrid Strategy**
-            self.results = strategy.define_strategy_Trend_Momentum_Volatility(data, parameters)   
-        elif self.strategy == "Stochastic_RSI_Bollinger_VWAP":  # 105. ** Stochastic RSI Bollinger VWAP Hybrid Strategy**
-            self.results = strategy.define_strategy_Stochastic_RSI_Bollinger_VWAP(data, parameters)       
-        elif self.strategy == "Stochastic_RSI_FULL":  #106. ** Stochastic RSI Strategy with %K and %D smoothing **
-            self.results = strategy.define_strategy_Stochastic_RSI_FULL(data, parameters)  
-        elif self.strategy == "Gaussian_Channel_FULL":  #107. **  Gaussian Channel strategy **
-            self.results = strategy.define_strategy_Gaussian_Channel_FULL(data, parameters) 
-        elif self.strategy == "Combined_Gaussian_Stochastic_RSI_FULL":  #108. ** combined the Gaussian Channel and Stochastic RSI strategies **
-            self.results = strategy.define_strategy_Combined_Gaussian_Stochastic_RSI_FULL(data, parameters) 
-        elif self.strategy == "OBV": # 109. **On-Balance Volume (OBV) **
-            self.results = strategy.define_strategy_OBV(data)
-        elif self.strategy == "Volume_delta": # 110. ** Volum Delta **
-            self.results = strategy.define_strategy_volume_delta(data)
-        elif self.strategy == "Ease_of_Movement": # 111. ** Ease of Movement **
-            self.results = strategy.define_strategy_ease_of_movement(data, parameters)
-        elif self.strategy == "WMA": # 112. ** Weight Moving Average **
-            self.results = strategy.define_strategy_wma(data,parameters)
-        elif self.strategy == "EMA": # 113. ** Exponential Moving Average **
-            self.results = strategy.define_strategy_ema(data,parameters)
-        elif self.strategy == "DEMA": # 114. ** Double Exponential Moving Average **
-            self.results = strategy.define_strategy_dema(data, parameters)
-        elif self.strategy == "AMA": # 115. ** Adaptive Moving Average **
-            self.results = strategy.define_strategy_ama(data, parameters)
-        elif self.strategy == "VIDYA": # 116. ** Variable Index Dynamic Average (VIDYA) **
-            self.results = strategy.define_strategy_vidya(data, parameters)
-        elif self.strategy == "SMA_cross":  # 117. ** Simple Moving Average Cross **
-            self.results = strategy.define_strategy_SMA_cross(data, parameters)
-        elif self.strategy == "Stochastic": # 118. **Stochastic Oscillator Strategy**
-           self.results = strategy.define_strategy_Stochastic(data, parameters)
-        elif self.strategy == "AO": # 119. **Awesome Oscillator (AO) Strategy**
-            self.results = strategy.define_strategy_AO(data, parameters)
-        elif self.strategy == "KST": # 120. **Know Sure Thing (KST) Strategy**
-            self.results = strategy.define_strategy_KST(data, parameters)
-        elif self.strategy == "Bollinger_SMA": # 121. **Bollinger Bands with SMA Strategy**
-            self.results = strategy.define_strategy_Bollinger(data, parameters)
-        elif self.strategy == "Bollinger_Keltner_Squeeze": # 122. **Bollinger Bands & Keltner Channel Squeeze Strategy**
-           self.results = strategy.define_strategy_Squeeze(data, parameters)
-        elif self.strategy == "StdDev_Channel": # 123. **Standard Deviation Channel Strategy**
-            self.results = strategy.define_strategy_StdDev_Channel(data, parameters)
-        elif self.strategy == "HV": # 124. **Historical Volatility (HV) Strategy**
-            self.results = strategy.define_strategy_HV(data, parameters)
-        elif self.strategy == "VR": # 125. ** Volatility Ratio (VR) Strategy **
-            self.results = strategy.define_strategy_VR(data, parameters)
-        elif self.strategy == "Simple_Pivot_Points": # 126. ** Simple_Pivot_Points Strategy **
-            self.results = strategy.define_strategy_Simple_Pivot_Points(data)
-        elif self.strategy == "DI": # 127. ** Directional Indicator (DI-Only) Strategy **
-            self.results = strategy.define_strategy_DI(data, parameters)
-        elif self.strategy == "Stochastic_RSI_StdDev_Channel": # 128. ** Stochastic RSI with Standard Deviation Channel Strategy **
-            self.results = strategy.define_strategy_Stochastic_RSI_StdDev_Channel(data, parameters)    
-        elif self.strategy == "Bollinger_Stochastic_RSI_Modified": #129. **Bollinger Bands with Stochastic RSI modified**
-            self.results = strategy.define_strategy_Bollinger_Stochastic_RSI_modified(data, parameters)  
-        elif self.strategy == "Keltner_Stochastic_RSI": #130. **Keltner Channel Calculation Bands with Stochastic RSI**
-            self.results = strategy.define_strategy_Keltner_Stochastic_RSI(data, parameters)      
-        elif self.strategy == "HMA_Stochastic_RSI": # 131. **Hull Moving Average Channel with Stochastic RSI**
-            self.results = strategy.define_strategy_HMA_StochRSI(data, parameters)    
-        elif self.strategy == "ADX_ATR_Bollinger_Stochastic_RSI":  # 132. **ADX ATR Bollinger Bands with Stochastic RSI**
-            self.results = strategy.define_strategy_ADX_ATR_Bollinger_Stochastic_RSI(data, parameters)    
-        elif self.strategy == "Supertrend_Stochastic_RSI":  # 133. **SuperTrend with Stochastic RSI**
-            self.results = strategy.define_strategy_Supertrend_Stochastic_RSI(data, parameters)                                                                                     
+        return "\nFutures Backtester (symbol = {}, start = {}, end = {})\n".format(
+            self.symbol, self.start, self.end
+        )
 
-    def optimize_strategy(self, param_ranges, metric="Multiple", output_file=None, Print_Data = False):
-        if Print_Data : print("\nOptimize Strategy is running.")
-        # Select the performance function based on the metric
+    def prepare_data(self, parameters):
+        data = self.data.copy()
+        strategy_func = get_strategy_function(self.strategy)
+
+        if strategy_func is None:
+            raise ValueError(f"No function found for strategy: {self.strategy}")
+
+        no_param_strategies = ["OBV", "Volume_delta", "Simple_Pivot_Points"]
+
+        if self.strategy in no_param_strategies:
+            self.results = strategy_func(data)
+        else:
+            self.results = strategy_func(data, parameters)
+
+    def optimize_strategy(
+        self,
+        param_ranges,
+        metric="Multiple",
+        output_file=None,
+        Print_Data=False,
+    ):
+        if Print_Data:
+            print("\nOptimize Strategy is running.")
+
         if metric == "Multiple":
             performance_function = self.calculate_multiple
         elif metric == "Sharpe":
@@ -296,65 +358,256 @@ class BackTesting_BN(BackTestingBase_BN):
         else:
             raise ValueError(f"Unsupported metric: {metric}")
 
-        # Generate parameter combinations using the provided ranges
         param_combinations = self._generate_param_combinations(param_ranges)
 
         performance = []
-        valid_combinations = []        
+        valid_combinations = []
+
         for params in param_combinations:
             self.prepare_data(parameters=params)
             self.run_backtest()
-            result = performance_function(self.results.strategy)
-            
+
+            if metric == "Sharpe":
+                self.add_leverage(self.leverage, report=False)
+                result = self.calculate_sharpe(
+                    np.log(self.results["strategy_leverage"].add(1))
+                )
+            else:
+                result = performance_function(self.results.strategy)
+
             if not np.isnan(result):
                 performance.append(result)
                 valid_combinations.append(params)
-            else:                
-                if Print_Data : print(f"There is Nan in Performace Optimization")
+            else:
+                if Print_Data:
+                    print("There is NaN in Performance Optimization")
 
-        self.results_overview = pd.DataFrame(data=valid_combinations, columns=list(param_ranges.keys()))
+        self.results_overview = pd.DataFrame(
+            data=valid_combinations,
+            columns=list(param_ranges.keys()),
+        )
+
         self.results_overview["performance"] = performance
-        if Print_Data : print(f"Performance values:\n{self.results_overview}")
-        self.results_overview.to_csv(os.path.join(Optimize_folder,'ALL_'+output_file), index=False)
+
+        if Print_Data:
+            print(f"Performance values:\n{self.results_overview}")
+
+        if output_file:
+            self.results_overview.to_csv(
+                os.path.join(Optimize_folder, "ALL_" + output_file),
+                index=False,
+            )
+
         best_params = self.find_best_strategy(output_file)
         return best_params
-    
+
+    def optimize_strategy_parallel(
+        self,
+        param_ranges,
+        metric="Robust",
+        output_file=None,
+        max_workers=None,
+        n_splits=5,
+        min_trades=30,
+        min_win_rate=0.45,
+        max_drawdown_limit=-0.40,
+        warmup_bars=150,
+    ):
+        """
+        Parallel robust optimization for indicator-based strategies.
+
+        metric options:
+            "Robust" -> robust composite score
+            "Sharpe" -> Sharpe-focused robust score
+            "PnL"    -> PnL-focused robust score
+        """
+
+        if max_workers is None:
+            max_workers = max(1, os.cpu_count() - 1)
+
+        os.makedirs(Optimize_folder, exist_ok=True)
+
+        if self.data is None or self.data.empty:
+            raise ValueError("No data available for optimization.")
+
+        if not isinstance(self.data.index, pd.DatetimeIndex):
+            raise ValueError("Data index must be DatetimeIndex for robust optimization.")
+
+        if not hasattr(self, "tp_year") or self.tp_year is None:
+            years = (self.data.index[-1] - self.data.index[0]).days / 365.25
+
+            if years <= 0:
+                raise ValueError(
+                    "Cannot calculate tp_year because data time span is too short."
+                )
+
+            self.tp_year = self.data["Close"].count() / years
+
+        param_combinations = self._generate_param_combinations(param_ranges)
+
+        param_names = list(param_ranges.keys())
+
+        jobs = [
+            (
+                self.data.copy(),
+                self.strategy,
+                params,
+                param_names,
+                self.tc,
+                self.leverage,
+                self.tp_year,
+                n_splits,
+                min_trades,
+                min_win_rate,
+                max_drawdown_limit,
+                metric,
+                warmup_bars,
+            )
+            for params in param_combinations
+        ]
+
+        rows = []
+
+        print(f"\nRunning robust parallel optimization with {max_workers} workers")
+        print(f"Total combinations: {len(jobs)}")
+        print(f"Metric mode: {metric}")
+        print(f"Folds: {n_splits}")
+        print(f"Warmup bars: {warmup_bars}")
+        print(f"Min trades: {min_trades}")
+        print(f"Min win rate: {min_win_rate}")
+        print(f"Max drawdown limit: {max_drawdown_limit}\n")
+
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(evaluate_param_set_robust, job)
+                for job in jobs
+            ]
+
+            for i, future in enumerate(as_completed(futures), 1):
+                params, metrics = future.result()
+
+                if metrics is not None:
+                    row = dict(zip(param_ranges.keys(), params))
+                    row.update(metrics)
+                    rows.append(row)
+
+                if i % 100 == 0:
+                    print(
+                        f"Completed {i}/{len(jobs)} combinations... "
+                        f"valid so far: {len(rows)}"
+                    )
+
+        self.results_overview = pd.DataFrame(rows)
+
+        if self.results_overview.empty:
+            print("No valid parameter combinations found.")
+            return None
+
+        self.results_overview.sort_values(
+            "performance",
+            ascending=False,
+            inplace=True,
+        )
+
+        if output_file:
+            self.results_overview.to_csv(
+                os.path.join(Optimize_folder, "ALL_" + output_file),
+                index=False,
+            )
+
+        best_params = self.find_best_strategy(output_file)
+        return best_params
+
     def _generate_param_combinations(self, param_ranges):
         ranges = [param_ranges[param] for param in param_ranges]
         return list(product(*ranges))
 
-    def find_best_strategy(self, output_file):
+    def find_best_strategy(self, output_file=None):
         try:
-            if self.results_overview.empty:
-                print("Error: Results overview is empty. Ensure your strategy generates valid results.")
-                return None  
+            if self.results_overview is None or self.results_overview.empty:
+                print("Error: Results overview is empty.")
+                return None
 
             if "performance" not in self.results_overview.columns:
-                print("Error: Column 'performance' not found in results overview.")
+                print("Error: Column 'performance' not found.")
                 return None
 
             best = self.results_overview.nlargest(1, "performance").iloc[0]
-            best_params = best.to_dict()
-            #print(f"Best strategy parameters: {best_params}")
-            print("✅ Best Strategy Parameters:")
-            for name, value in best_params.items():
-                print(f"{name:<35}: {value:>10.2f}")
-            print("\/" * 25)
-            best_params_tuple = tuple(best_params.values())
-            self.test_strategy(best_params_tuple)
 
+            # -------------------------------
+            # Separate metric vs param columns
+            # -------------------------------
+            metric_columns = {
+                "performance",
+                "mean_sharpe",
+                "min_sharpe",
+                "std_sharpe",
+                "median_pnl",
+                "max_drawdown",
+                "win_rate",
+                "num_trades",
+                "n_valid_folds",
+            }
+
+            param_names = [
+                col for col in self.results_overview.columns
+                if col not in metric_columns
+            ]
+
+            # -------------------------------
+            # Extract parameters
+            # -------------------------------
+            param_dict = {name: best[name] for name in param_names}
+
+            # Separate risk params
+            stop_loss_pct = param_dict.pop("stop_loss_pct", None)
+            take_profit_pct = param_dict.pop("take_profit_pct", None)
+
+            strategy_params_tuple = tuple(param_dict.values())
+
+            use_sl_tp = stop_loss_pct is not None and take_profit_pct is not None
+
+            # -------------------------------
+            # Print best params
+            # -------------------------------
+            print("\n✅ Best Strategy Parameters:")
+            for name in param_names:
+                print(f"{name:<35}: {best[name]}")
+
+            print("\n📊 Optimization Metrics:")
+            for name in metric_columns:
+                if name in best.index:
+                    print(f"{name:<35}: {best[name]:>10.4f}")
+
+            print("\\/" * 25)
+
+            # -------------------------------
+            # Run final backtest correctly
+            # -------------------------------
+            self.test_strategy(
+                strategy_params_tuple,
+                use_sl_tp=use_sl_tp,
+                stop_loss_pct=stop_loss_pct if stop_loss_pct is not None else 0.03,
+                take_profit_pct=take_profit_pct if take_profit_pct is not None else 0.06,
+            )
+
+            # -------------------------------
+            # Save best result
+            # -------------------------------
             if output_file:
-                best_params_df = pd.DataFrame([best_params])
-                best_params_df.to_csv(os.path.join(Optimize_folder, output_file), index=False)
+                best_params_df = pd.DataFrame([best.to_dict()])
+                best_params_df.to_csv(
+                    os.path.join(Optimize_folder, output_file),
+                    index=False,
+                )
 
-            return best_params_tuple
+            # Return FULL tuple (including SL/TP for logging consistency)
+            return tuple(best[name] for name in param_names)
 
         except IndexError:
             print("Error: No rows in results overview after applying nlargest.")
             return None
+
         except Exception as e:
             print(f"An unexpected error occurred: {e}")
-            return None
-
-
- 
+            return None  
